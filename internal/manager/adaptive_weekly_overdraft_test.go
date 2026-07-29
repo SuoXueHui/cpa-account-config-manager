@@ -1,12 +1,99 @@
 package manager
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"cpa-account-config-manager/internal/cpaapi"
 )
+
+func TestAppWiresAdaptiveOverdraftAfterConcurrencyAndOriginal(t *testing.T) {
+	app := NewApp(&fakeAuthHost{}, []byte("index"))
+	defer app.Close()
+	if len(app.requestHooks.transformers) != 3 {
+		t.Fatalf("transformers = %d", len(app.requestHooks.transformers))
+	}
+	if _, ok := app.requestHooks.transformers[0].(*AccountConcurrencyService); !ok {
+		t.Fatalf("first transformer = %T", app.requestHooks.transformers[0])
+	}
+	if _, ok := app.requestHooks.transformers[1].(*WeeklyOverdraftExperiment); !ok {
+		t.Fatalf("second transformer = %T", app.requestHooks.transformers[1])
+	}
+	if _, ok := app.requestHooks.transformers[2].(*AdaptiveWeeklyOverdraftExperiment); !ok {
+		t.Fatalf("third transformer = %T", app.requestHooks.transformers[2])
+	}
+}
+
+func TestAppForwardsAdaptiveUsageAndCompletionAfterConfiguration(t *testing.T) {
+	now := time.Date(2026, 7, 29, 9, 0, 0, 0, time.UTC)
+	app := NewApp(&fakeAuthHost{}, []byte("index"))
+	defer app.Close()
+	app.ConfigureHost([]byte("data_dir: "+t.TempDir()+"\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n"), cpaapi.SchemaVersion)
+	app.adaptiveOverdraft.now = func() time.Time { return now }
+	app.adaptiveOverdraft.ObserveAccounts([]Account{adaptiveTestAccount("account-1", "stable-auth-1", 100, now)})
+	app.adaptiveOverdraft.recordRequest("request-1", "stable-auth-1", AdaptiveStrategyS1, now)
+	app.HandleRequestComplete(cpaapi.RequestCompletion{RequestID: "request-1", StatusCode: http.StatusOK, CompletedAt: now})
+	app.HandleUsage(cpaapi.UsageRecord{
+		Provider: "codex", AuthID: "stable-auth-1", AuthIndex: "account-1", RequestedAt: now,
+		Detail:          cpaapi.UsageDetail{TotalTokens: 77},
+		ResponseHeaders: http.Header{"X-Codex-Secondary-Used-Percent": {"100"}, "X-Codex-Secondary-Window-Minutes": {"10080"}},
+	})
+	state, ok := app.adaptiveOverdraft.stateForAuthID("stable-auth-1")
+	if !ok || state.Phase != AdaptivePhaseActiveS1 || state.PostThresholdSuccesses != 1 || state.PostThresholdTokens != 77 {
+		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestAppLegacySchemaKeepsAdaptiveRequestLifecycleInactive(t *testing.T) {
+	app := NewApp(&fakeAuthHost{}, []byte("index"))
+	defer app.Close()
+	app.ConfigureHost([]byte("data_dir: "+t.TempDir()+"\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n"), cpaapi.LegacySchemaVersion)
+	if app.RequestInterceptionActive() || app.RequestCompletionActive() {
+		t.Fatal("legacy host activated adaptive request lifecycle")
+	}
+}
+
+func TestAccountListProjectsSanitizedAdaptiveOverdraftState(t *testing.T) {
+	now := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	host := &fakeAuthHost{entries: []cpaapi.HostAuthFileEntry{{
+		ID: "stable-auth-1", AuthIndex: "account-1", Name: "account-1.json", Provider: "codex", Type: "codex", Source: "memory",
+	}}}
+	usage := adaptiveUsageReader{"account-1": adaptiveTestAccount("account-1", "stable-auth-1", 100, now).Usage}
+	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return true })
+	engine.now = func() time.Time { return now }
+	engine.Configure(Config{DataDir: t.TempDir()}, cpaapi.SchemaVersion)
+	service := NewAccountService(host, usage)
+	service.SetObserver(engine)
+	service.SetAdaptiveWeeklyOverdraft(engine)
+	response, errList := service.List(context.Background(), ListQuery{Page: 1, PageSize: 10})
+	if errList != nil {
+		t.Fatalf("List() error = %v", errList)
+	}
+	if len(response.Accounts) != 1 || response.Accounts[0].AdaptiveWeeklyOverdraft == nil {
+		t.Fatalf("accounts = %#v", response.Accounts)
+	}
+	summary := response.Accounts[0].AdaptiveWeeklyOverdraft
+	if summary.Phase != AdaptivePhaseArmed || summary.Strategy != AdaptiveStrategyS1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	raw, errMarshal := json.Marshal(summary)
+	if errMarshal != nil {
+		t.Fatalf("Marshal() error = %v", errMarshal)
+	}
+	if strings.Contains(string(raw), "stable-auth-1") || strings.Contains(string(raw), adaptiveAuthFingerprint("stable-auth-1")) {
+		t.Fatalf("summary leaked identity = %s", raw)
+	}
+}
+
+type adaptiveUsageReader map[string]*AccountUsageSnapshot
+
+func (reader adaptiveUsageReader) Snapshot(authIndex string) *AccountUsageSnapshot {
+	return reader[authIndex]
+}
 
 func TestAdaptiveWeeklyOverdraftStateArmsAndEscalatesBoundedStrategies(t *testing.T) {
 	now := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)

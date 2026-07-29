@@ -52,34 +52,35 @@ type RegistrationCapabilities struct {
 }
 
 type App struct {
-	mu              sync.RWMutex
-	config          Config
-	accounts        *AccountService
-	deduplication   *AccountDeduplicationService
-	deletions       *AccountDeleteService
-	tokenRefresh    *AccountTokenRefreshService
-	previews        *PreviewService
-	jobs            *JobEngine
-	policies        *PolicyEngine
-	inspection      *InspectionEngine
-	updates         *UpdateChecker
-	force           *ForceSyncEngine
-	imports         *ImportService
-	usage           *UsageTracker
-	operations      *OperationJournal
-	modelTests      *ModelTestService
-	newAccountProbe *newAccountModelProbeEngine
-	quotaBootstrap  *accountQuotaMetadataBootstrap
-	managementDoer  HTTPDoer
-	requestHooks    *RequestHook
-	concurrency     *AccountConcurrencyService
-	hostSchema      uint32
-	runtime         *RuntimeOwnership
-	experiments     *ExperimentalSettingsService
-	agentIdentity   *AgentIdentityExperiment
-	indexHTML       []byte
-	quiesceOnce     sync.Once
-	quotaResetLocks [64]sync.Mutex
+	mu                sync.RWMutex
+	config            Config
+	accounts          *AccountService
+	deduplication     *AccountDeduplicationService
+	deletions         *AccountDeleteService
+	tokenRefresh      *AccountTokenRefreshService
+	previews          *PreviewService
+	jobs              *JobEngine
+	policies          *PolicyEngine
+	inspection        *InspectionEngine
+	updates           *UpdateChecker
+	force             *ForceSyncEngine
+	imports           *ImportService
+	usage             *UsageTracker
+	operations        *OperationJournal
+	modelTests        *ModelTestService
+	newAccountProbe   *newAccountModelProbeEngine
+	quotaBootstrap    *accountQuotaMetadataBootstrap
+	managementDoer    HTTPDoer
+	requestHooks      *RequestHook
+	concurrency       *AccountConcurrencyService
+	hostSchema        uint32
+	runtime           *RuntimeOwnership
+	experiments       *ExperimentalSettingsService
+	agentIdentity     *AgentIdentityExperiment
+	adaptiveOverdraft *AdaptiveWeeklyOverdraftExperiment
+	indexHTML         []byte
+	quiesceOnce       sync.Once
+	quotaResetLocks   [64]sync.Mutex
 }
 
 func NewApp(host AuthHost, indexHTML []byte) *App {
@@ -109,7 +110,8 @@ func NewApp(host AuthHost, indexHTML []byte) *App {
 	imports := NewImportService(host, mutations)
 	imports.SetAgentIdentityExperiment(agentIdentity)
 	weeklyOverdraft := NewWeeklyOverdraftExperiment(experiments.WeeklyOverdraftEnabled)
-	requestHooks := NewRequestHook(concurrency, weeklyOverdraft)
+	adaptiveOverdraft := NewAdaptiveWeeklyOverdraftExperiment(experiments.AdaptiveWeeklyOverdraftEnabled)
+	requestHooks := NewRequestHook(concurrency, weeklyOverdraft, adaptiveOverdraft)
 	runtimeMarker := ""
 	if provider, ok := host.(interface{ RuntimeProcessMarker() string }); ok {
 		runtimeMarker = provider.RuntimeProcessMarker()
@@ -125,33 +127,35 @@ func NewApp(host AuthHost, indexHTML []byte) *App {
 	inspection.SetDeleteService(deletions)
 	inspection.SetOperationJournal(operations)
 	app := &App{
-		config:          normalizeConfig(Config{}),
-		accounts:        accounts,
-		deduplication:   NewAccountDeduplicationService(accounts),
-		deletions:       deletions,
-		tokenRefresh:    NewAccountTokenRefreshService(accounts, host),
-		previews:        NewPreviewService(accounts),
-		jobs:            jobs,
-		policies:        policies,
-		inspection:      inspection,
-		updates:         updates,
-		force:           force,
-		imports:         imports,
-		usage:           usage,
-		operations:      operations,
-		modelTests:      modelTests,
-		newAccountProbe: newAccountProbe,
-		quotaBootstrap:  quotaBootstrap,
-		requestHooks:    requestHooks,
-		concurrency:     concurrency,
-		hostSchema:      cpaapi.SchemaVersion,
-		runtime:         runtime,
-		experiments:     experiments,
-		agentIdentity:   agentIdentity,
-		indexHTML:       append([]byte(nil), indexHTML...),
+		config:            normalizeConfig(Config{}),
+		accounts:          accounts,
+		deduplication:     NewAccountDeduplicationService(accounts),
+		deletions:         deletions,
+		tokenRefresh:      NewAccountTokenRefreshService(accounts, host),
+		previews:          NewPreviewService(accounts),
+		jobs:              jobs,
+		policies:          policies,
+		inspection:        inspection,
+		updates:           updates,
+		force:             force,
+		imports:           imports,
+		usage:             usage,
+		operations:        operations,
+		modelTests:        modelTests,
+		newAccountProbe:   newAccountProbe,
+		quotaBootstrap:    quotaBootstrap,
+		requestHooks:      requestHooks,
+		concurrency:       concurrency,
+		hostSchema:        cpaapi.SchemaVersion,
+		runtime:           runtime,
+		experiments:       experiments,
+		agentIdentity:     agentIdentity,
+		indexHTML:         append([]byte(nil), indexHTML...),
+		adaptiveOverdraft: adaptiveOverdraft,
 	}
 	app.previews.SetAccountConcurrency(concurrency)
-	accounts.SetObserver(accountObserverGroup{newAccountProbe, quotaBootstrap})
+	accounts.SetAdaptiveWeeklyOverdraft(adaptiveOverdraft)
+	accounts.SetObserver(accountObserverGroup{newAccountProbe, quotaBootstrap, adaptiveOverdraft})
 	policies.SetObserver(newAccountProbe)
 	policies.SetModelPolicyApplier(app.applyConditionalModelPolicy)
 	policies.SetQuotaMetadataProbe(app.runPolicyQuotaMetadataProbe)
@@ -193,6 +197,7 @@ func (a *App) ConfigureHost(raw []byte, hostSchema uint32) {
 	a.force.SetBackgroundWorkOwner(a.runtime)
 	a.operations.Configure(config)
 	a.experiments.ConfigureHost(config, hostSchema)
+	a.adaptiveOverdraft.Configure(config, hostSchema)
 	a.newAccountProbe.Configure(config)
 	a.quotaBootstrap.Start()
 	a.jobs.Configure(config)
@@ -218,6 +223,7 @@ func (a *App) HandleUsage(record cpaapi.UsageRecord) {
 		return
 	}
 	a.usage.Observe(record)
+	a.adaptiveOverdraft.ObserveUsage(record)
 	a.inspection.Observe(record)
 }
 
@@ -248,6 +254,7 @@ func (a *App) quiesceRetiredInstance() {
 		a.imports.Shutdown()
 		a.agentIdentity.Clear()
 		a.concurrency.Shutdown()
+		a.adaptiveOverdraft.Close()
 		a.usage.Close()
 		if superseded {
 			debug.FreeOSMemory()
@@ -311,14 +318,20 @@ func (a *App) HandleRequestAfter(request cpaapi.RequestInterceptRequest) cpaapi.
 }
 
 func (a *App) HandleRequestComplete(completion cpaapi.RequestCompletion) {
-	if a == nil || a.concurrency == nil {
+	if a == nil {
 		return
 	}
-	a.concurrency.Complete(completion)
+	if a.concurrency != nil {
+		a.concurrency.Complete(completion)
+	}
+	if a.adaptiveOverdraft != nil {
+		a.adaptiveOverdraft.ObserveCompletion(completion)
+	}
 }
 
 func (a *App) RequestCompletionActive() bool {
-	return a != nil && a.concurrency != nil && a.concurrency.RequestInterceptionActive()
+	return a != nil && (a.concurrency != nil && a.concurrency.RequestInterceptionActive() ||
+		a.adaptiveOverdraft != nil && a.adaptiveOverdraft.RequestInterceptionActive())
 }
 
 func (a *App) HandleAgentIdentityAuthParse(request cpaapi.AuthParseRequest) (cpaapi.AuthParseResponse, error) {

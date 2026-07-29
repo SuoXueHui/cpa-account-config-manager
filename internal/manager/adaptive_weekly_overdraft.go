@@ -51,6 +51,17 @@ type adaptiveOverdraftRecord struct {
 	HardStopReason           string                    `json:"hard_stop_reason,omitempty"`
 }
 
+type AdaptiveWeeklyOverdraftSummary struct {
+	Phase                  AdaptiveOverdraftPhase    `json:"phase"`
+	Strategy               AdaptiveOverdraftStrategy `json:"strategy,omitempty"`
+	PostThresholdSuccesses int64                     `json:"post_threshold_successes"`
+	PostThresholdTokens    int64                     `json:"post_threshold_tokens"`
+	LastSuccessAt          *time.Time                `json:"last_success_at,omitempty"`
+	LastFailureAt          *time.Time                `json:"last_failure_at,omitempty"`
+	ResetAt                *time.Time                `json:"reset_at,omitempty"`
+	HardStopReason         string                    `json:"hard_stop_reason,omitempty"`
+}
+
 type adaptiveOverdraftRequest struct {
 	Fingerprint string
 	Strategy    AdaptiveOverdraftStrategy
@@ -319,6 +330,27 @@ func (e *AdaptiveWeeklyOverdraftExperiment) stateForAuthID(authID string) (adapt
 	record, exists := e.records[fingerprint]
 	e.mu.RUnlock()
 	return record, exists
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) SummaryForAuthID(authID string) *AdaptiveWeeklyOverdraftSummary {
+	record, exists := e.stateForAuthID(authID)
+	if !exists || record.Phase == AdaptivePhaseIdle && record.PostThresholdSuccesses == 0 && record.PostThresholdTokens == 0 {
+		return nil
+	}
+	return &AdaptiveWeeklyOverdraftSummary{
+		Phase: record.Phase, Strategy: record.Strategy,
+		PostThresholdSuccesses: record.PostThresholdSuccesses, PostThresholdTokens: record.PostThresholdTokens,
+		LastSuccessAt: adaptiveTimePointer(record.LastSuccessAt), LastFailureAt: adaptiveTimePointer(record.LastFailureAt),
+		ResetAt: adaptiveTimePointer(record.ResetAt), HardStopReason: sanitizeAdaptiveHardStopReason(record.HardStopReason),
+	}
+}
+
+func adaptiveTimePointer(value time.Time) *time.Time {
+	value = value.UTC()
+	if value.IsZero() {
+		return nil
+	}
+	return &value
 }
 
 func (e *AdaptiveWeeklyOverdraftExperiment) pruneExpired(now time.Time) {
