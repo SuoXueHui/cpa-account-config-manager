@@ -105,12 +105,12 @@ func (e *AdaptiveWeeklyOverdraftExperiment) InterceptRequestForStrategy(request 
 }
 
 func (e *AdaptiveWeeklyOverdraftExperiment) strategyForAuthID(authID string, now time.Time) (AdaptiveOverdraftStrategy, bool) {
-	fingerprint := adaptiveAuthFingerprint(authID)
-	if fingerprint == "" {
+	fingerprint, ok := adaptiveAuthFingerprintKey(authID)
+	if !ok {
 		return "", false
 	}
 	e.mu.RLock()
-	record, exists := e.records[fingerprint]
+	record, exists := e.records[string(fingerprint[:])]
 	e.mu.RUnlock()
 	if !exists || record.Phase == AdaptivePhaseIdle || record.Phase == AdaptivePhaseExhausted || record.Phase == AdaptivePhaseHardStopped || !validAdaptiveStrategy(record.Strategy) || record.Strategy == "" {
 		return "", false

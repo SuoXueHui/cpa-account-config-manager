@@ -112,6 +112,88 @@ func BenchmarkAccountListDetailLoading(b *testing.B) {
 	}
 }
 
+func BenchmarkAdaptiveWeeklyOverdraftDisabled(b *testing.B) {
+	benchmarkAdaptiveWeeklyOverdraft(b, false, "codex", AdaptivePhaseActiveS1, AdaptiveStrategyS1)
+}
+
+func BenchmarkAdaptiveWeeklyOverdraftNonCodex(b *testing.B) {
+	benchmarkAdaptiveWeeklyOverdraft(b, true, "openai", AdaptivePhaseActiveS1, AdaptiveStrategyS1)
+}
+
+func BenchmarkAdaptiveWeeklyOverdraftBelowThreshold(b *testing.B) {
+	benchmarkAdaptiveWeeklyOverdraft(b, true, "codex", AdaptivePhaseIdle, "")
+}
+
+func BenchmarkAdaptiveWeeklyOverdraftTransformS1(b *testing.B) {
+	benchmarkAdaptiveWeeklyOverdraft(b, true, "codex", AdaptivePhaseActiveS1, AdaptiveStrategyS1)
+}
+
+func BenchmarkAdaptiveWeeklyOverdraftTransformS4(b *testing.B) {
+	benchmarkAdaptiveWeeklyOverdraft(b, true, "codex", AdaptivePhaseActiveS4, AdaptiveStrategyS4)
+}
+
+func TestAdaptiveWeeklyOverdraftBelowThresholdAllocations(t *testing.T) {
+	const authID = "below-threshold-auth"
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return true })
+	engine.now = func() time.Time { return now }
+	engine.Configure(Config{DataDir: t.TempDir()}, cpaapi.SchemaVersion)
+	t.Cleanup(engine.Close)
+	engine.ObserveAccounts([]Account{{
+		AuthID: authID, Provider: "codex",
+		Usage: &AccountUsageSnapshot{Codex: &CodexUsageSnapshot{
+			ObservedAt: now, SevenDay: &UsageWindowSnapshot{UsedPercent: 50},
+		}},
+	}})
+	request := adaptivePerformanceRequest("below-threshold", authID, "codex")
+
+	allocations := testing.AllocsPerRun(1_000, func() {
+		response, changed := engine.InterceptRequest(request)
+		if changed || response.Body != nil {
+			t.Fatal("below-threshold request must pass through without allocating a response body")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("below-threshold allocations = %.2f, want 0", allocations)
+	}
+}
+
+func benchmarkAdaptiveWeeklyOverdraft(b *testing.B, enabled bool, format string, phase AdaptiveOverdraftPhase, strategy AdaptiveOverdraftStrategy) {
+	const authID = "benchmark-auth"
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return enabled })
+	engine.now = func() time.Time { return now }
+	engine.Configure(Config{DataDir: b.TempDir()}, cpaapi.SchemaVersion)
+	engine.newCallID = func(strategy AdaptiveOverdraftStrategy) (string, bool) {
+		return "call_cpa_adaptive_" + string(strategy) + "_benchmark", true
+	}
+	if enabled && format == "codex" {
+		fingerprint := adaptiveAuthFingerprint(authID)
+		engine.records[fingerprint] = adaptiveOverdraftRecord{
+			Fingerprint: fingerprint, Phase: phase, Strategy: strategy,
+			QuotaObservedAt: now, ResetAt: now.Add(24 * time.Hour),
+		}
+	}
+	request := adaptivePerformanceRequest("benchmark-request", authID, format)
+	b.Cleanup(engine.Close)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		response, changed := engine.InterceptRequest(request)
+		if phase == AdaptivePhaseIdle && (changed || response.Body != nil) {
+			b.Fatal("below-threshold request changed")
+		}
+	}
+}
+
+func adaptivePerformanceRequest(requestID, authID, format string) cpaapi.RequestInterceptRequest {
+	return cpaapi.RequestInterceptRequest{
+		RequestID: requestID, ToFormat: format,
+		Body:     []byte(`{"input":[{"type":"message","role":"user","content":"continue"}]}`),
+		Metadata: map[string]any{selectedAuthMetadataKey: authID},
+	}
+}
+
 func TestAccountDetailLoadingUsesBoundedConcurrency(t *testing.T) {
 	entries, details := accountDetailFixtures(accountDetailWorkers + 4)
 	host := &blockingDetailAuthHost{

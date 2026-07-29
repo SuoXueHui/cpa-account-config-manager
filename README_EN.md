@@ -44,8 +44,9 @@ journal without exposing raw credentials to the browser.
 - Send previewable and testable HTTPS GET notifications to services such as
   Bark and ntfy. Generic and conditional notifications can combine account,
   availability, quota, and health variables.
-- Experimentally support Codex 5-hour and 7-day quota overdraft continuation plus Agent
-  Identity and personal access token import, login, and native plugin auth.
+- Preserve the author's original Codex 5-hour and 7-day quota overdraft mode and add a
+  separate, mutually exclusive account-aware adaptive S1/S2/S4 mode, plus
+  Agent Identity and personal access token import, login, and native auth.
 - Follow the CPA Management Center language and theme. The UI supports English,
   Simplified Chinese, Traditional Chinese, and Russian.
 
@@ -154,12 +155,52 @@ the effective plugin data directory.
 
 Experimental Features currently contains:
 
-- Codex 5-hour and 7-day quota overdraft probing, which relies on upstream tool-call
+- Codex 5-hour and 7-day quota overdraft probing, including the author's original mode
+  and a separate adaptive maximum-overdraft mode. Both rely on upstream tool-call
   continuation behavior.
 - Codex Agent Identity/PAT conversion and authentication hooks.
 
-Both are off by default and isolated behind stable hooks so they can be removed
+These features are off by default and isolated behind stable hooks so they can be removed
 without changing the standard account-management paths.
+
+### Codex Weekly-Quota Overdraft Modes
+
+The two switches are persisted under the plugin's `experimental_settings`:
+
+```yaml
+experimental_settings:
+  weekly_overdraft_enabled: false
+  adaptive_weekly_overdraft_enabled: false
+```
+
+- `weekly_overdraft_enabled` is the author's original mode and retains its
+  existing request transformation and inspection behavior.
+- `adaptive_weekly_overdraft_enabled` is account-aware and requires CPA request
+  lifecycle schema v2 for stable selected-account and completion events.
+- The switches are mutually exclusive. Management writes that enable both are
+  rejected. If a legacy startup configuration contains both, the plugin keeps
+  the author mode enabled and disables adaptive mode.
+- Adaptive injection is armed only when that account's seven-day quota reaches
+  `99%` and the quota evidence is no more than `15` minutes old. Below-threshold,
+  stale, non-Codex, and unattributed requests pass through unchanged.
+- Each account starts at `s1` and escalates to `s2`, then `s4`, only after a
+  definitive seven-day quota failure. Generic transient rate limits do not
+  escalate. HTTP 401 authentication failures and HTTP 402/workspace
+  deactivation stop further probing immediately.
+- State is stored at `<data_dir>/adaptive-weekly-overdraft.json` with restrictive
+  permissions. It contains account fingerprints, strategy, phase, counters,
+  and timestamps, but no Auth IDs, tokens, request bodies, or upstream bodies.
+
+To roll back to the author mode, turn off **Codex adaptive maximum overdraft**
+and enable **Codex weekly quota overdraft continuation** in the UI, or set
+`weekly_overdraft_enabled: true` and
+`adaptive_weekly_overdraft_enabled: false`, then reload plugin configuration.
+On a lifecycle schema v1 host, adaptive mode is unavailable while the author
+mode remains supported.
+
+Both modes depend on current upstream behavior. **Neither guarantees a fixed
+continuation amount or that generation will continue.** Results can vary by
+account, subscription, workspace state, and upstream policy.
 
 ## Security Model
 
@@ -177,10 +218,12 @@ without changing the standard account-management paths.
 
 ## Compatibility
 
-The plugin uses CLIProxyAPI native plugin ABI/schema version 1 and requires a
-CPA build with native plugin discovery, Auth list/get/save callbacks, the Usage
-Plugin callback, and current authenticated Management APIs for Auth status,
-field edits, account-selected API calls, deletion, and plugin-store updates.
+The plugin uses the CLIProxyAPI native plugin ABI and remains compatible with
+request lifecycle schema v1; adaptive maximum-overdraft mode separately
+requires lifecycle schema v2. CPA must also provide native plugin discovery,
+Auth list/get/save callbacks, the Usage Plugin callback, and current
+authenticated Management APIs for Auth status, field edits, account-selected
+API calls, deletion, and plugin-store updates.
 It does not import CLIProxyAPI Go packages and does not patch the CPA binary.
 
 ## Development

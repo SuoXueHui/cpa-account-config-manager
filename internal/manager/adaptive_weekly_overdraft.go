@@ -641,12 +641,24 @@ func (e *AdaptiveWeeklyOverdraftExperiment) evictOldestRequestLocked() {
 }
 
 func adaptiveAuthFingerprint(authID string) string {
-	authID = strings.TrimSpace(authID)
-	if authID == "" || len(authID) > 4096 {
+	encoded, ok := adaptiveAuthFingerprintKey(authID)
+	if !ok {
 		return ""
 	}
+	return string(encoded[:])
+}
+
+// adaptiveAuthFingerprintKey keeps request-path lookups stack-backed. Persistent
+// state still converts this value to the existing hexadecimal string format.
+func adaptiveAuthFingerprintKey(authID string) ([sha256.Size * 2]byte, bool) {
+	var encoded [sha256.Size * 2]byte
+	authID = strings.TrimSpace(authID)
+	if authID == "" || len(authID) > 4096 {
+		return encoded, false
+	}
 	sum := sha256.Sum256([]byte(authID))
-	return hex.EncodeToString(sum[:])
+	hex.Encode(encoded[:], sum[:])
+	return encoded, true
 }
 
 func adaptiveAccountProviderEligible(account Account) bool {
