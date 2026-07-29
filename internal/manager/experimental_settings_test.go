@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +12,100 @@ import (
 
 	"cpa-account-config-manager/internal/cpaapi"
 )
+
+func TestExperimentalSettingsRejectMutuallyExclusiveOverdraftModes(t *testing.T) {
+	service := NewExperimentalSettingsService()
+	service.ConfigureHost(Config{DataDir: t.TempDir()}, cpaapi.SchemaVersion)
+	_, errSet := service.Set(ExperimentalSettings{
+		WeeklyOverdraftEnabled:         true,
+		AdaptiveWeeklyOverdraftEnabled: true,
+	})
+	if !errors.Is(errSet, ErrOverdraftModesMutuallyExclusive) {
+		t.Fatalf("Set() error = %v", errSet)
+	}
+}
+
+func TestExperimentalSettingsRejectAdaptiveModeOnLegacyHost(t *testing.T) {
+	service := NewExperimentalSettingsService()
+	service.ConfigureHost(Config{DataDir: t.TempDir()}, cpaapi.LegacySchemaVersion)
+	_, errSet := service.Set(ExperimentalSettings{AdaptiveWeeklyOverdraftEnabled: true})
+	if !errors.Is(errSet, ErrAdaptiveWeeklyOverdraftUnavailable) {
+		t.Fatalf("Set() error = %v", errSet)
+	}
+}
+
+func TestExperimentalSettingsConflictingStartupConfigKeepsOriginalMode(t *testing.T) {
+	service := NewExperimentalSettingsService()
+	settings := ExperimentalSettings{WeeklyOverdraftEnabled: true, AdaptiveWeeklyOverdraftEnabled: true}
+	service.ConfigureHost(Config{DataDir: t.TempDir(), ExperimentalSettings: &settings}, cpaapi.SchemaVersion)
+	snapshot := service.Snapshot()
+	if !snapshot.Settings.WeeklyOverdraftEnabled || snapshot.Settings.AdaptiveWeeklyOverdraftEnabled {
+		t.Fatalf("settings = %#v", snapshot.Settings)
+	}
+	if snapshot.ConfigurationWarning != "overdraft_modes_conflicted_original_preserved" {
+		t.Fatalf("configuration_warning = %q", snapshot.ConfigurationWarning)
+	}
+}
+
+func TestExperimentalSettingsSnapshotReportsAdaptiveAvailability(t *testing.T) {
+	service := NewExperimentalSettingsService()
+	service.ConfigureHost(Config{DataDir: t.TempDir()}, cpaapi.SchemaVersion)
+	if snapshot := service.Snapshot(); !snapshot.AdaptiveWeeklyOverdraftAvailable || snapshot.AdaptiveWeeklyOverdraftUnavailableReason != "" {
+		t.Fatalf("schema v2 snapshot = %#v", snapshot)
+	}
+
+	legacy := NewExperimentalSettingsService()
+	legacy.ConfigureHost(Config{DataDir: t.TempDir()}, cpaapi.LegacySchemaVersion)
+	if snapshot := legacy.Snapshot(); snapshot.AdaptiveWeeklyOverdraftAvailable || snapshot.AdaptiveWeeklyOverdraftUnavailableReason != "host_schema_v2_required" {
+		t.Fatalf("legacy snapshot = %#v", snapshot)
+	}
+}
+
+func TestExperimentalSettingsManagementRejectsInvalidAdaptiveWrites(t *testing.T) {
+	path := "/v0/management/plugins/cpa-account-config-manager/experiments"
+	for _, test := range []struct {
+		name       string
+		hostSchema uint32
+		body       string
+	}{
+		{name: "mutually-exclusive", hostSchema: cpaapi.SchemaVersion, body: `{"weekly_overdraft_enabled":true,"adaptive_weekly_overdraft_enabled":true}`},
+		{name: "legacy-host", hostSchema: cpaapi.LegacySchemaVersion, body: `{"adaptive_weekly_overdraft_enabled":true}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := NewApp(&fakeAuthHost{}, []byte("index"))
+			defer app.Close()
+			app.ConfigureHost([]byte("data_dir: "+t.TempDir()+"\n"), test.hostSchema)
+			response := app.HandleManagement(context.Background(), cpaapi.ManagementRequest{
+				Method: http.MethodPut, Path: path, Body: []byte(test.body),
+			})
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s", response.StatusCode, response.Body)
+			}
+			if snapshot := app.experiments.Snapshot(); snapshot.Settings.WeeklyOverdraftEnabled || snapshot.Settings.AdaptiveWeeklyOverdraftEnabled {
+				t.Fatalf("invalid write changed settings = %#v", snapshot.Settings)
+			}
+		})
+	}
+}
+
+func TestExperimentalSettingsLegacyHostDisablesPersistedAdaptiveMode(t *testing.T) {
+	dataDir := t.TempDir()
+	current := NewExperimentalSettingsService()
+	current.ConfigureHost(Config{DataDir: dataDir}, cpaapi.SchemaVersion)
+	if _, errSet := current.Set(ExperimentalSettings{AdaptiveWeeklyOverdraftEnabled: true}); errSet != nil {
+		t.Fatalf("Set() error = %v", errSet)
+	}
+
+	legacy := NewExperimentalSettingsService()
+	legacy.ConfigureHost(Config{DataDir: dataDir}, cpaapi.LegacySchemaVersion)
+	snapshot := legacy.Snapshot()
+	if snapshot.Settings.AdaptiveWeeklyOverdraftEnabled {
+		t.Fatal("legacy host loaded persisted adaptive mode")
+	}
+	if snapshot.ConfigurationWarning != "adaptive_weekly_overdraft_requires_host_schema_v2" {
+		t.Fatalf("configuration_warning = %q", snapshot.ConfigurationWarning)
+	}
+}
 
 func TestExperimentalSettingsDefaultDisabledAndPersistAcrossRestart(t *testing.T) {
 	dataDir := t.TempDir()
