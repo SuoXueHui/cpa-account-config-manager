@@ -87,6 +87,7 @@ func TestManagementRegistrationUsesExactFixedRoutes(t *testing.T) {
 		http.MethodPost + " /plugins/cpa-account-config-manager/updates/check":                            {},
 		http.MethodGet + " /plugins/cpa-account-config-manager/experiments":                               {},
 		http.MethodPut + " /plugins/cpa-account-config-manager/experiments":                               {},
+		http.MethodGet + " /plugins/cpa-account-config-manager/experiments/adaptive-weekly-overdraft":     {},
 		http.MethodPost + " /plugins/cpa-account-config-manager/experiments/agent-identity/session-login": {},
 		http.MethodGet + " /plugins/cpa-account-config-manager/operations":                                {},
 		http.MethodGet + " /plugins/cpa-account-config-manager/operations/export":                         {},

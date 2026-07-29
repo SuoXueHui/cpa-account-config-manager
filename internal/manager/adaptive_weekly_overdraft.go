@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,27 @@ type AdaptiveWeeklyOverdraftSummary struct {
 	LastFailureAt          *time.Time                `json:"last_failure_at,omitempty"`
 	ResetAt                *time.Time                `json:"reset_at,omitempty"`
 	HardStopReason         string                    `json:"hard_stop_reason,omitempty"`
+}
+
+type AdaptiveWeeklyOverdraftAccountState struct {
+	AccountID              string                    `json:"account_id"`
+	Phase                  AdaptiveOverdraftPhase    `json:"phase"`
+	Strategy               AdaptiveOverdraftStrategy `json:"strategy,omitempty"`
+	PostThresholdSuccesses int64                     `json:"post_threshold_successes"`
+	PostThresholdTokens    int64                     `json:"post_threshold_tokens"`
+	LastSuccessAt          *time.Time                `json:"last_success_at,omitempty"`
+	LastFailureAt          *time.Time                `json:"last_failure_at,omitempty"`
+	ResetAt                *time.Time                `json:"reset_at,omitempty"`
+	HardStopReason         string                    `json:"hard_stop_reason,omitempty"`
+}
+
+type AdaptiveWeeklyOverdraftManagementSnapshot struct {
+	Available             bool                                  `json:"available"`
+	HostSchemaVersion     uint32                                `json:"host_schema_version"`
+	RequiredSchemaVersion uint32                                `json:"required_schema_version"`
+	UnavailableReason     string                                `json:"unavailable_reason,omitempty"`
+	StorageError          string                                `json:"storage_error,omitempty"`
+	Accounts              []AdaptiveWeeklyOverdraftAccountState `json:"accounts"`
 }
 
 type adaptiveOverdraftRequest struct {
@@ -346,6 +368,50 @@ func (e *AdaptiveWeeklyOverdraftExperiment) SummaryForAuthID(authID string) *Ada
 		LastSuccessAt: adaptiveTimePointer(record.LastSuccessAt), LastFailureAt: adaptiveTimePointer(record.LastFailureAt),
 		ResetAt: adaptiveTimePointer(record.ResetAt), HardStopReason: sanitizeAdaptiveHardStopReason(record.HardStopReason),
 	}
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) ManagementSnapshot() AdaptiveWeeklyOverdraftManagementSnapshot {
+	snapshot := AdaptiveWeeklyOverdraftManagementSnapshot{
+		RequiredSchemaVersion: cpaapi.SchemaVersion,
+		Accounts:              []AdaptiveWeeklyOverdraftAccountState{},
+	}
+	if e == nil {
+		snapshot.HostSchemaVersion = cpaapi.LegacySchemaVersion
+		snapshot.UnavailableReason = "adaptive_weekly_overdraft_unavailable"
+		return snapshot
+	}
+	e.mu.RLock()
+	snapshot.HostSchemaVersion = normalizeHostSchemaVersion(e.hostSchema)
+	snapshot.StorageError = e.storageErr
+	snapshot.Available = e.configured && e.hostSchema >= cpaapi.SchemaVersion && e.storageErr == ""
+	if e.hostSchema < cpaapi.SchemaVersion {
+		snapshot.UnavailableReason = "host_schema_v2_required"
+	} else if e.storageErr != "" {
+		snapshot.UnavailableReason = "state_storage_unavailable"
+	} else if !e.configured {
+		snapshot.UnavailableReason = "adaptive_weekly_overdraft_unavailable"
+	}
+	for fingerprint, accountID := range e.accountIDs {
+		accountID = safeOperationIdentifier(accountID, 256)
+		record, exists := e.records[fingerprint]
+		if !exists || accountID == "" {
+			continue
+		}
+		snapshot.Accounts = append(snapshot.Accounts, AdaptiveWeeklyOverdraftAccountState{
+			AccountID: accountID, Phase: record.Phase, Strategy: record.Strategy,
+			PostThresholdSuccesses: record.PostThresholdSuccesses, PostThresholdTokens: record.PostThresholdTokens,
+			LastSuccessAt: adaptiveTimePointer(record.LastSuccessAt), LastFailureAt: adaptiveTimePointer(record.LastFailureAt),
+			ResetAt: adaptiveTimePointer(record.ResetAt), HardStopReason: sanitizeAdaptiveHardStopReason(record.HardStopReason),
+		})
+	}
+	e.mu.RUnlock()
+	sort.Slice(snapshot.Accounts, func(left, right int) bool {
+		return snapshot.Accounts[left].AccountID < snapshot.Accounts[right].AccountID
+	})
+	if len(snapshot.Accounts) > maxAdaptiveOverdraftAccounts {
+		snapshot.Accounts = snapshot.Accounts[:maxAdaptiveOverdraftAccounts]
+	}
+	return snapshot
 }
 
 func (e *AdaptiveWeeklyOverdraftExperiment) AllowUsageAutoDisable(record cpaapi.UsageRecord, now time.Time) bool {
