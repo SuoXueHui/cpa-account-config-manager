@@ -43,11 +43,16 @@ type UsageIdentityReader interface {
 	UsageIdentity(string) string
 }
 
+type AdaptiveWeeklyOverdraftReader interface {
+	SummaryForAuthID(string) *AdaptiveWeeklyOverdraftSummary
+}
+
 type AccountService struct {
 	host        AuthHost
 	usage       UsageSnapshotReader
 	concurrency *AccountConcurrencyService
 	observer    interface{ ObserveAccounts([]Account) }
+	adaptive    AdaptiveWeeklyOverdraftReader
 }
 
 func (s *AccountService) SetObserver(observer interface{ ObserveAccounts([]Account) }) {
@@ -55,6 +60,13 @@ func (s *AccountService) SetObserver(observer interface{ ObserveAccounts([]Accou
 		return
 	}
 	s.observer = observer
+}
+
+func (s *AccountService) SetAdaptiveWeeklyOverdraft(reader AdaptiveWeeklyOverdraftReader) {
+	if s == nil {
+		return
+	}
+	s.adaptive = reader
 }
 
 func (s *AccountService) SetAccountConcurrency(concurrency *AccountConcurrencyService) {
@@ -247,6 +259,11 @@ func (s *AccountService) baseAccounts(ctx context.Context) ([]Account, error) {
 	}
 	if s.observer != nil {
 		s.observer.ObserveAccounts(accounts)
+	}
+	if s.adaptive != nil {
+		for index := range accounts {
+			accounts[index].AdaptiveWeeklyOverdraft = s.adaptive.SummaryForAuthID(accounts[index].AuthID)
+		}
 	}
 	return accounts, nil
 }
