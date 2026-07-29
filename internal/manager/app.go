@@ -192,7 +192,7 @@ func (a *App) ConfigureHost(raw []byte, hostSchema uint32) {
 	a.quotaBootstrap.SetBackgroundWorkOwner(a.runtime)
 	a.force.SetBackgroundWorkOwner(a.runtime)
 	a.operations.Configure(config)
-	a.experiments.Configure(config)
+	a.experiments.ConfigureHost(config, hostSchema)
 	a.newAccountProbe.Configure(config)
 	a.quotaBootstrap.Start()
 	a.jobs.Configure(config)
@@ -1526,6 +1526,9 @@ func (a *App) handlePutExperimentalSettings(req cpaapi.ManagementRequest) cpaapi
 	}
 	snapshot, errSave := a.experiments.Set(settings)
 	if errSave != nil {
+		if errors.Is(errSave, ErrOverdraftModesMutuallyExclusive) || errors.Is(errSave, ErrAdaptiveWeeklyOverdraftUnavailable) {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": errSave.Error()})
+		}
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "experimental settings could not be persisted"})
 	}
 	if a.policies.Snapshot().Policy.NewAccountModelProbeEnabled {
