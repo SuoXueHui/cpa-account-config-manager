@@ -537,7 +537,6 @@ func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, ma
 	return result, nil
 }
 
-<<<<<<< HEAD
 func (s *ModelTestService) observeNormalQuotaFailure(accountID, quotaWindow, reason string, testedAt time.Time, experimental bool) {
 	if s == nil || experimental || safeModelProbeReason(reason) != "quota_limited" || s.overdraft == nil {
 		return

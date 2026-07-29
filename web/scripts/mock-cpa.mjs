@@ -94,7 +94,9 @@ let updatePolicy = {
 };
 let experimentalSettings = {
   weekly_overdraft_enabled: false,
+  adaptive_weekly_overdraft_enabled: false,
   agent_identity_enabled: true,
+  auto_model_whitelist_enabled: true,
 };
 let operationSettings = {
   extended_history: false,
@@ -1117,15 +1119,17 @@ const server = http.createServer(async (request, response) => {
     });
   }
   if (request.method === "GET" && url.pathname.endsWith("/experiments")) {
-    return json(response, 200, { settings: experimentalSettings });
+    return json(response, 200, { settings: experimentalSettings, adaptive_weekly_overdraft_available: true });
   }
   if (request.method === "PUT" && url.pathname.endsWith("/experiments")) {
     const body = await readJSON(request);
     experimentalSettings = {
       weekly_overdraft_enabled: Boolean(body.weekly_overdraft_enabled),
+      adaptive_weekly_overdraft_enabled: Boolean(body.adaptive_weekly_overdraft_enabled),
       agent_identity_enabled: Boolean(body.agent_identity_enabled),
+      auto_model_whitelist_enabled: true,
     };
-    return json(response, 200, { settings: experimentalSettings });
+    return json(response, 200, { settings: experimentalSettings, adaptive_weekly_overdraft_available: true });
   }
 	if (request.method === "POST" && url.pathname.endsWith("/accounts/config")) {
 		const body = await readJSON(request);
