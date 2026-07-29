@@ -118,7 +118,7 @@ func (e *AdaptiveWeeklyOverdraftExperiment) strategyForAuthID(authID string, now
 	if !record.ResetAt.IsZero() && !now.Before(record.ResetAt) {
 		return "", false
 	}
-	if record.LastObservedAt.IsZero() || record.LastObservedAt.After(now.Add(time.Minute)) || now.Sub(record.LastObservedAt) > adaptiveOverdraftQuotaFreshness {
+	if record.QuotaObservedAt.IsZero() || record.QuotaObservedAt.After(now.Add(time.Minute)) || now.Sub(record.QuotaObservedAt) > adaptiveOverdraftQuotaFreshness {
 		return "", false
 	}
 	return record.Strategy, true

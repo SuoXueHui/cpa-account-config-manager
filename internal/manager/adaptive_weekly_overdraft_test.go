@@ -89,6 +89,120 @@ func TestAccountListProjectsSanitizedAdaptiveOverdraftState(t *testing.T) {
 	}
 }
 
+func TestAdaptiveAutomaticDisableProbeUsesFallbackWithoutConsumingStrategy(t *testing.T) {
+	now := time.Date(2026, 7, 29, 11, 0, 0, 0, time.UTC)
+	calls := make([]ModelTestRequest, 0, 3)
+	result := executeAutomaticDisableProbePlan(context.Background(), func(_ context.Context, request ModelTestRequest, _, _ string) (ModelTestResult, error) {
+		calls = append(calls, request)
+		probe := ModelTestResult{
+			AccountID: request.AccountID, Model: request.Model, Status: "review", ReasonCode: "quota_limited",
+			StatusCode: http.StatusTooManyRequests, TestedAt: now,
+			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
+		}
+		if len(calls) == 1 {
+			probe.Status = "unsupported"
+			probe.ReasonCode = "model_not_found"
+			probe.StatusCode = http.StatusBadRequest
+		}
+		if len(calls) == 3 {
+			probe.Status = "available"
+			probe.ReasonCode = "model_response_ok"
+			probe.StatusCode = http.StatusOK
+		}
+		return probe, nil
+	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+		Name: "adaptive_weekly_overdraft", AttemptLimit: 6, Models: []string{"preferred", "fallback"},
+		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
+		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
+	}, "http://127.0.0.1:8317", "management-key", func() time.Time { return now })
+	if result.AutoDisableProbeStatus != InspectionAutoDisableProbePassed || result.AutoDisableProbeAttempts != 3 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(calls) != 3 || calls[0].AdaptiveWeeklyOverdraftStrategy != AdaptiveStrategyS1 || calls[1].AdaptiveWeeklyOverdraftStrategy != AdaptiveStrategyS1 || calls[2].AdaptiveWeeklyOverdraftStrategy != AdaptiveStrategyS2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestAdaptiveAutomaticDisableProbeStopsOnHardFailure(t *testing.T) {
+	now := time.Date(2026, 7, 29, 11, 30, 0, 0, time.UTC)
+	calls := 0
+	result := executeAutomaticDisableProbePlan(context.Background(), func(_ context.Context, request ModelTestRequest, _, _ string) (ModelTestResult, error) {
+		calls++
+		return ModelTestResult{
+			AccountID: request.AccountID, Model: request.Model, Status: "unavailable", ReasonCode: "authentication_failed",
+			StatusCode: http.StatusUnauthorized, TestedAt: now,
+			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
+		}, nil
+	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+		Name: "adaptive_weekly_overdraft", AttemptLimit: 9, Models: []string{"preferred", "fallback", "compatibility"},
+		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
+		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
+	}, "http://127.0.0.1:8317", "management-key", func() time.Time { return now })
+	if calls != 1 || result.AutoDisableProbeStatus != InspectionAutoDisableProbeFailed || result.AutoDisableProbeReasonCode != "authentication_failed" {
+		t.Fatalf("calls=%d result=%#v", calls, result)
+	}
+}
+
+func TestAdaptiveAutomaticDisableProbeLeavesTransientFailureInconclusive(t *testing.T) {
+	now := time.Date(2026, 7, 29, 11, 45, 0, 0, time.UTC)
+	calls := 0
+	result := executeAutomaticDisableProbePlan(context.Background(), func(_ context.Context, request ModelTestRequest, _, _ string) (ModelTestResult, error) {
+		calls++
+		return ModelTestResult{
+			AccountID: request.AccountID, Model: request.Model, Status: "review", ReasonCode: "transient_failure",
+			StatusCode: http.StatusTooManyRequests, TestedAt: now,
+			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
+		}, nil
+	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+		Name: "adaptive_weekly_overdraft", AttemptLimit: 9, Models: []string{"preferred"},
+		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
+		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
+	}, "http://127.0.0.1:8317", "management-key", func() time.Time { return now })
+	if calls != 1 || result.AutoDisableProbeStatus != InspectionAutoDisableProbeInconclusive || result.AutoDisableProbeReasonCode != "transient_failure" {
+		t.Fatalf("calls=%d result=%#v", calls, result)
+	}
+}
+
+func TestAdaptiveAutomaticDisableProbeAllStrategiesFailDefinitively(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	result := executeAutomaticDisableProbePlan(context.Background(), func(_ context.Context, request ModelTestRequest, _, _ string) (ModelTestResult, error) {
+		calls++
+		return ModelTestResult{
+			AccountID: request.AccountID, Model: request.Model, Status: "unavailable", ReasonCode: "quota_limited",
+			StatusCode: http.StatusTooManyRequests, QuotaWindow: InspectionQuotaWindowSevenDay, TestedAt: now,
+			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
+		}, nil
+	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+		Name: "adaptive_weekly_overdraft", AttemptLimit: 9, Models: []string{"preferred", "fallback", "compatibility"},
+		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
+		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
+	}, "http://127.0.0.1:8317", "management-key", func() time.Time { return now })
+	if calls != 3 || result.AutoDisableProbeStatus != InspectionAutoDisableProbeFailed || result.AutoDisableProbeAttempts != 3 {
+		t.Fatalf("calls=%d result=%#v", calls, result)
+	}
+}
+
+func TestAdaptiveProbeFailureDoesNotRegressRememberedHigherStrategy(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 30, 0, 0, time.UTC)
+	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return true })
+	engine.now = func() time.Time { return now }
+	engine.Configure(Config{DataDir: t.TempDir()}, cpaapi.SchemaVersion)
+	engine.ObserveAccounts([]Account{adaptiveTestAccount("account-1", "stable-auth-1", 100, now)})
+	engine.mu.Lock()
+	record := engine.records[adaptiveAuthFingerprint("stable-auth-1")]
+	record.Strategy = AdaptiveStrategyS4
+	record.Phase = AdaptivePhaseActiveS4
+	engine.records[record.Fingerprint] = record
+	engine.mu.Unlock()
+
+	engine.ObserveProbeResult("stable-auth-1", AdaptiveStrategyS1, ModelTestResult{
+		Status: "unavailable", ReasonCode: "quota_limited", StatusCode: http.StatusTooManyRequests,
+		QuotaWindow: InspectionQuotaWindowSevenDay, TestedAt: now,
+	})
+	assertAdaptiveState(t, engine, "stable-auth-1", AdaptivePhaseActiveS4, AdaptiveStrategyS4)
+}
+
 type adaptiveUsageReader map[string]*AccountUsageSnapshot
 
 func (reader adaptiveUsageReader) Snapshot(authIndex string) *AccountUsageSnapshot {

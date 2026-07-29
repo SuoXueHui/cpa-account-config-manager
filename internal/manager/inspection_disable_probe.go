@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -139,6 +140,10 @@ func automaticDisableProbePlanFor(guards []AutomaticDisableGuard, account Accoun
 		plan.Name = safeOperationIdentifier(plan.Name, 64)
 		plan.AttemptLimit = boundedAutoDisableProbeCount(plan.AttemptLimit)
 		plan.Models = safeAutomaticDisableProbeModels(plan.Models)
+		plan.Strategies = safeAdaptiveOverdraftStrategies(plan.Strategies)
+		if len(plan.Strategies) > 0 {
+			plan.AttemptLimit = min(plan.AttemptLimit, len(plan.Strategies)*len(plan.Models))
+		}
 		if plan.Name == "" || plan.AttemptLimit == 0 || len(plan.Models) == 0 {
 			continue
 		}
@@ -168,6 +173,9 @@ func executeAutomaticDisableProbePlan(
 		result.AutoDisableProbeStatus = InspectionAutoDisableProbeInconclusive
 		result.AutoDisableProbeReasonCode = "upstream_unavailable"
 		return result
+	}
+	if len(plan.Strategies) > 0 {
+		return executeAdaptiveDisableProbePlan(ctx, runner, account, result, plan, managementBaseURL, managementKey, now)
 	}
 	for attempt := 0; attempt < plan.AttemptLimit; attempt++ {
 		if ctx.Err() != nil {
@@ -240,6 +248,128 @@ func automaticDisableProbeFailureReason(err error) string {
 		return "management_auth_unavailable"
 	}
 	return "upstream_unavailable"
+}
+
+func executeAdaptiveDisableProbePlan(
+	ctx context.Context,
+	runner automaticDisableProbeRunner,
+	account Account,
+	result InspectionResult,
+	plan AutomaticDisableProbePlan,
+	managementBaseURL string,
+	managementKey string,
+	now func() time.Time,
+) InspectionResult {
+	for _, strategy := range safeAdaptiveOverdraftStrategies(plan.Strategies) {
+		strategyQuotaFailed := false
+		for _, model := range plan.Models {
+			if result.AutoDisableProbeAttempts >= plan.AttemptLimit {
+				result.AutoDisableProbeStatus = InspectionAutoDisableProbeInconclusive
+				result.AutoDisableProbeReasonCode = "probe_limit_reached"
+				return result
+			}
+			if ctx.Err() != nil {
+				result.AutoDisableProbeStatus = InspectionAutoDisableProbeInconclusive
+				result.AutoDisableProbeReasonCode = "request_timeout"
+				return result
+			}
+			request := plan.Request
+			request.AccountID = account.ID
+			request.Model = model
+			request.ExperimentalWeeklyOverdraft = false
+			request.ExperimentalAdaptiveWeeklyOverdraft = true
+			request.AdaptiveWeeklyOverdraftStrategy = strategy
+			probe, errRun := runner(ctx, request, managementBaseURL, managementKey)
+			if errRun != nil || probe.Experiment == nil || !probe.Experiment.Applied || probe.Experiment.Name != plan.Name || probe.Experiment.Strategy != strategy {
+				result.AutoDisableProbeStatus = InspectionAutoDisableProbeInconclusive
+				result.AutoDisableProbeReasonCode = "upstream_unavailable"
+				return result
+			}
+			result.AutoDisableProbeAttempts++
+			result.AutoDisableProbeReasonCode = safeOptionalInspectionReason(probe.ReasonCode)
+			result.AutoDisableProbeModel = safeModelIdentifier(probe.Model)
+			testedAt := probe.TestedAt.UTC()
+			if testedAt.IsZero() && now != nil {
+				testedAt = now().UTC()
+			}
+			result.AutoDisableProbeTestedAt = timePointer(testedAt)
+			if plan.Observe != nil {
+				plan.Observe(strategy, probe)
+			}
+			switch {
+			case probe.Status == "available":
+				result.AutoDisableProbeStatus = InspectionAutoDisableProbePassed
+				return result
+			case adaptiveProbeHardStop(probe):
+				result.AutoDisableProbeStatus = InspectionAutoDisableProbeFailed
+				return result
+			case adaptiveProbeUnsupported(probe):
+				continue
+			case adaptiveProbeDefinitiveQuota(probe):
+				strategyQuotaFailed = true
+			default:
+				result.AutoDisableProbeStatus = InspectionAutoDisableProbeInconclusive
+				return result
+			}
+			break
+		}
+		if !strategyQuotaFailed {
+			result.AutoDisableProbeStatus = InspectionAutoDisableProbeInconclusive
+			if result.AutoDisableProbeReasonCode == "" {
+				result.AutoDisableProbeReasonCode = "unsupported_provider"
+			}
+			return result
+		}
+	}
+	result.AutoDisableProbeStatus = InspectionAutoDisableProbeFailed
+	return result
+}
+
+func safeAdaptiveOverdraftStrategies(strategies []AdaptiveOverdraftStrategy) []AdaptiveOverdraftStrategy {
+	out := make([]AdaptiveOverdraftStrategy, 0, min(len(strategies), 3))
+	seen := make(map[AdaptiveOverdraftStrategy]struct{}, len(strategies))
+	for _, strategy := range strategies {
+		if adaptiveStrategyPairCount(strategy) == 0 {
+			continue
+		}
+		if _, exists := seen[strategy]; exists {
+			continue
+		}
+		seen[strategy] = struct{}{}
+		out = append(out, strategy)
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
+}
+
+func adaptiveProbeHardStop(result ModelTestResult) bool {
+	if result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusPaymentRequired {
+		return true
+	}
+	switch result.ReasonCode {
+	case "authentication_failed", "invalid_credentials", "token_revoked", "workspace_deactivated", "account_deactivated", "deactivated_workspace":
+		return true
+	default:
+		return false
+	}
+}
+
+func adaptiveProbeUnsupported(result ModelTestResult) bool {
+	switch result.ReasonCode {
+	case "model_not_found", "unsupported_provider", "model_blocked_by_account_policy":
+		return true
+	default:
+		return result.Status == "unsupported"
+	}
+}
+
+func adaptiveProbeDefinitiveQuota(result ModelTestResult) bool {
+	if result.ReasonCode != "quota_limited" && result.ReasonCode != "quota_exhausted" {
+		return false
+	}
+	return result.QuotaWindow == "" || result.QuotaWindow == InspectionQuotaWindowSevenDay || result.QuotaWindow == InspectionQuotaWindowMultiple
 }
 
 func safeAutomaticDisableProbeModels(models []string) []string {
