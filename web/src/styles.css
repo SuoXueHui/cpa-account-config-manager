@@ -246,6 +246,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .model-test-experimental-note span { color: var(--text-secondary); font-size: 10px; line-height: 1.5; }
 .experimental-model-test-button { color: var(--info-color); border-color: color-mix(in srgb, var(--info-color) 32%, var(--border-color)); background: var(--blue-soft); }
 .experimental-model-test-button:hover { color: var(--text-primary); border-color: var(--info-color); }
+.experimental-model-test-button.adaptive, .model-test-experimental-note.adaptive { color: var(--success); border-color: color-mix(in srgb, var(--success) 32%, var(--border-color)); background: var(--success-soft); }
 .model-test-running, .model-test-error { min-height: 58px; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border-color); }
 .model-test-running { color: var(--primary-active); background: var(--primary-10); }
 .model-test-running > div { min-width: 0; display: grid; gap: 3px; }
@@ -336,6 +337,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .usage-quota-alert { min-width: 0; height: 12px; display: flex; align-items: center; gap: 4px; color: var(--danger); font-size: 8px; }
 .usage-quota-alert span { white-space: nowrap; }
 .usage-quota-alert b { min-width: 0; overflow: hidden; color: var(--text-secondary); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.adaptive-overdraft-status { min-width: 0; min-height: 16px; display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--info-color); font-size: 8px; white-space: nowrap; }
+.adaptive-overdraft-status strong { flex: 0 0 auto; font-size: 9px; }
+.adaptive-overdraft-status span { min-width: 0; overflow: hidden; color: var(--text-secondary); text-overflow: ellipsis; }
+.adaptive-overdraft-status.is-stopped { color: var(--danger); }
 .success, .tone-success { color: var(--success); }
 .danger { color: var(--danger); }
 .account-table time { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }

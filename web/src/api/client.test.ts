@@ -424,13 +424,32 @@ describe("management API client", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await testAccountModel("auth-1", "gpt-5.4", true);
+    await testAccountModel("auth-1", "gpt-5.4", "original");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({
       account_id: "auth-1",
       model: "gpt-5.4",
       experimental_weekly_overdraft: true,
+    });
+  });
+
+  it("adds only the adaptive weekly-overdraft flag for an adaptive model test", async () => {
+    setSession("", "management-secret");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      account_id: "auth-1", provider: "codex", model: "gpt-5.4", status: "available",
+      reason_code: "model_response_ok", latency_ms: 286, tested_at: "2026-07-29T08:00:00Z",
+      experiment: { name: "adaptive_weekly_overdraft", applied: true, strategy: "s2" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testAccountModel("auth-1", "gpt-5.4", "adaptive");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      account_id: "auth-1",
+      model: "gpt-5.4",
+      experimental_adaptive_weekly_overdraft: true,
     });
   });
 

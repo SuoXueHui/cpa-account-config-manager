@@ -302,13 +302,16 @@ export async function useAccountActiveReset(accountID: string): Promise<QuotaMet
 	});
 }
 
-export async function testAccountModel(accountID: string, model: string, experimentalWeeklyOverdraft = false): Promise<ModelTestResult> {
+export type OverdraftModelTestMode = "none" | "original" | "adaptive";
+
+export async function testAccountModel(accountID: string, model: string, mode: OverdraftModelTestMode = "none"): Promise<ModelTestResult> {
   return request<ModelTestResult>("/accounts/model-test", {
     method: "POST",
     body: JSON.stringify({
       account_id: accountID,
       model: model.trim(),
-      ...(experimentalWeeklyOverdraft ? { experimental_weekly_overdraft: true } : {}),
+      ...(mode === "original" ? { experimental_weekly_overdraft: true } : {}),
+      ...(mode === "adaptive" ? { experimental_adaptive_weekly_overdraft: true } : {}),
     }),
   });
 }

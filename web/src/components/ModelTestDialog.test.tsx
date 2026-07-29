@@ -182,7 +182,7 @@ describe("ModelTestDialog", () => {
       }}
       error=""
       testing={false}
-      experimentalAvailable
+      originalOverdraftAvailable
       onClose={vi.fn()}
       onTest={vi.fn()}
     />);
@@ -218,7 +218,7 @@ describe("ModelTestDialog", () => {
       result={{ ...result, experiment: { name: "weekly_overdraft", applied: true, call_id: "call_cpa_overdraft_fresh123" } }}
       error=""
       testing={false}
-      experimentalAvailable
+      originalOverdraftAvailable
       onClose={vi.fn()}
       onTest={onTest}
     />);
@@ -226,8 +226,29 @@ describe("ModelTestDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "模型可用性测试" });
     expect(within(dialog).getByText("已加载实验请求")).toBeInTheDocument();
     expect(within(dialog).getByText("call_cpa_overdraft_fresh123")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "加载实验性功能" }));
-    expect(onTest).toHaveBeenCalledWith("gpt-5.6-sol", true);
+    await user.click(within(dialog).getByRole("button", { name: "测试作者透支模式" }));
+    expect(onTest).toHaveBeenCalledWith("gpt-5.6-sol", "original");
+  });
+
+  it("runs author and adaptive overdraft probes as distinct modes", async () => {
+    const user = userEvent.setup();
+    const onTest = vi.fn();
+    render(<ModelTestDialog
+      account={account}
+      result={null}
+      error=""
+      testing={false}
+      originalOverdraftAvailable
+      adaptiveOverdraftAvailable
+      onClose={vi.fn()}
+      onTest={onTest}
+    />);
+
+    const dialog = screen.getByRole("dialog", { name: "模型可用性测试" });
+    await user.click(within(dialog).getByRole("button", { name: "测试作者透支模式" }));
+    expect(onTest).toHaveBeenLastCalledWith("gpt-5.6-sol", "original");
+    await user.click(within(dialog).getByRole("button", { name: "测试自适应最大透支" }));
+    expect(onTest).toHaveBeenLastCalledWith("gpt-5.6-sol", "adaptive");
   });
 
   it("uses Codex defaults and experimental controls for Agent Identity accounts", async () => {
@@ -238,7 +259,7 @@ describe("ModelTestDialog", () => {
       result={null}
       error=""
       testing={false}
-      experimentalAvailable
+      originalOverdraftAvailable
       onClose={vi.fn()}
       onTest={onTest}
     />);
@@ -249,9 +270,9 @@ describe("ModelTestDialog", () => {
     expect(within(dialog).getByText("实验测试会使用新的关联工具调用编号发起真实 Codex 模型探测，并显示脱敏后的上游响应。")).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "开始测试" }));
-    expect(onTest).toHaveBeenCalledWith("gpt-5.6-sol", false);
-    await user.click(within(dialog).getByRole("button", { name: "加载实验性功能" }));
-    expect(onTest).toHaveBeenCalledWith("gpt-5.6-sol", true);
+    expect(onTest).toHaveBeenCalledWith("gpt-5.6-sol", "none");
+    await user.click(within(dialog).getByRole("button", { name: "测试作者透支模式" }));
+    expect(onTest).toHaveBeenCalledWith("gpt-5.6-sol", "original");
   });
 
   it("restores the latest tested model and keeps tested models in the dropdown", async () => {
@@ -277,7 +298,7 @@ describe("ModelTestDialog", () => {
     await user.clear(modelInput);
     await user.type(modelInput, "  gpt-5.3-codex  ");
     await user.click(within(dialog).getByRole("button", { name: "开始测试" }));
-    expect(onTest).toHaveBeenCalledWith("gpt-5.3-codex", false);
+    expect(onTest).toHaveBeenCalledWith("gpt-5.3-codex", "none");
     first.unmount();
 
     render(<ModelTestDialog account={account} result={null} error="" testing={false} onClose={vi.fn()} onTest={vi.fn()} />);
@@ -312,7 +333,7 @@ describe("ModelTestDialog", () => {
 
     await user.selectOptions(modelSelect, "gpt-5.5");
     await user.click(within(dialog).getByRole("button", { name: "开始测试" }));
-    expect(onTest).toHaveBeenCalledWith("gpt-5.5", false);
+    expect(onTest).toHaveBeenCalledWith("gpt-5.5", "none");
   });
 
   it("removes deny-listed defaults and chooses the first safe model", async () => {
@@ -335,6 +356,6 @@ describe("ModelTestDialog", () => {
     expect(within(dialog).getByLabelText("测试模型")).toHaveValue("gpt-5.5");
     expect(dialog.querySelector('option[value="gpt-5.6-sol"]')).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "开始测试" }));
-    expect(onTest).toHaveBeenCalledWith("gpt-5.5", false);
+    expect(onTest).toHaveBeenCalledWith("gpt-5.5", "none");
   });
 });

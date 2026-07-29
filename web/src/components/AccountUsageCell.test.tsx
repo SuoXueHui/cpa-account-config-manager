@@ -298,4 +298,18 @@ describe("AccountUsageCell", () => {
     }} />);
     expect(screen.getByRole("status")).toHaveTextContent("额度已用尽透支探测未完成，等待下次巡检 · 等待已认证的巡检请求");
   });
+
+  it("adds adaptive overdraft state below the quota summary", () => {
+    render(<AccountUsageCell account={{
+      ...baseAccount,
+      adaptive_weekly_overdraft: {
+        phase: "active_s2",
+        strategy: "s2",
+        post_threshold_successes: 8,
+        post_threshold_tokens: 8_192,
+      },
+    }} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Adaptive S2成功 88192 tok");
+  });
 });
