@@ -139,7 +139,7 @@ describe("OtherSettingsWorkspace", () => {
         return jsonResponse({ plugins_enabled: true, plugins: [{ id: "cpa-account-config-manager", version: "0.2.991", installed: true, installed_version: "0.2.991", update_available: false }] });
       }
       if (url.endsWith("/experiments") && init.method === "PUT") {
-        return jsonResponse({ settings: { weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true } });
+        return jsonResponse({ settings: { weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true } });
       }
       if (url.endsWith("/experiments")) return jsonResponse({ settings: { weekly_overdraft_enabled: false, agent_identity_enabled: false, auto_model_whitelist_enabled: false } });
       if (url.endsWith("/config") && init.method === "PATCH") return jsonResponse({});
@@ -164,9 +164,68 @@ describe("OtherSettingsWorkspace", () => {
     await waitFor(() => expect(requests.some(({ url, init }) => url.endsWith("/experiments") && init.method === "PUT")).toBe(true));
     const configRequest = requests.find(({ url, init }) => url.endsWith("/config") && init.method === "PATCH");
     const saveRequest = requests.find(({ url, init }) => url.endsWith("/experiments") && init.method === "PUT");
-    expect(JSON.parse(String(configRequest?.init.body))).toEqual({ experimental_settings: { weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true } });
-    expect(JSON.parse(String(saveRequest?.init.body))).toEqual({ weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true });
-    expect(onExperimentalSettingsChange).toHaveBeenLastCalledWith({ weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true });
+    expect(JSON.parse(String(configRequest?.init.body))).toEqual({ experimental_settings: { weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true } });
+    expect(JSON.parse(String(saveRequest?.init.body))).toEqual({ weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true });
+    expect(onExperimentalSettingsChange).toHaveBeenLastCalledWith({ weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true });
     expect(onNotice).toHaveBeenCalledWith("实验性设置已保存");
+  });
+  it("switches atomically between author and adaptive weekly-overdraft modes", async () => {
+    const user = userEvent.setup();
+    const saved: ExperimentalSettings[] = [];
+    vi.spyOn(api, "getEffectiveUpdateStatus").mockResolvedValue({
+      policy: { check_enabled: false, check_interval_hours: 24, auto_update: false },
+      current_version: "0.3.1300", update_available: false, checking: false, pending: false,
+    });
+    vi.spyOn(api, "getCPAServerVersionStatus").mockResolvedValue({ update_available: false, checked_at: "2026-07-29T00:00:00Z" });
+    vi.spyOn(api, "getExperimentalSettings").mockResolvedValue({
+      settings: { weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: false, auto_model_whitelist_enabled: true },
+      adaptive_weekly_overdraft_available: true,
+    });
+    vi.spyOn(api, "saveExperimentalSettings").mockImplementation(async (settings) => {
+      saved.push(settings);
+      return { settings, adaptive_weekly_overdraft_available: true };
+    });
+
+    render(<OtherSettingsWorkspace onAPIError={() => undefined} onNotice={() => undefined} />);
+    const workspace = await screen.findByRole("region", { name: "其他配置" });
+    await user.click(within(workspace).getByRole("tab", { name: "实验性功能" }));
+    const panel = within(workspace).getByRole("tabpanel", { name: "实验性功能" });
+    const original = within(panel).getByRole("checkbox", { name: "Codex 周额度透支续用" });
+    const adaptive = within(panel).getByRole("checkbox", { name: "Codex 自适应最大透支" });
+    expect(original).toBeChecked();
+    expect(adaptive).not.toBeChecked();
+
+    await user.click(adaptive);
+    expect(adaptive).toBeChecked();
+    expect(original).not.toBeChecked();
+    await user.click(within(panel).getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual({
+      weekly_overdraft_enabled: false,
+      adaptive_weekly_overdraft_enabled: true,
+      agent_identity_enabled: false,
+      auto_model_whitelist_enabled: true,
+    });
+  });
+
+  it("disables adaptive weekly overdraft on lifecycle schema v1", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getEffectiveUpdateStatus").mockResolvedValue({
+      policy: { check_enabled: false, check_interval_hours: 24, auto_update: false },
+      current_version: "0.3.1300", update_available: false, checking: false, pending: false,
+    });
+    vi.spyOn(api, "getCPAServerVersionStatus").mockResolvedValue({ update_available: false, checked_at: "2026-07-29T00:00:00Z" });
+    vi.spyOn(api, "getExperimentalSettings").mockResolvedValue({
+      settings: { weekly_overdraft_enabled: false, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: false, auto_model_whitelist_enabled: true },
+      adaptive_weekly_overdraft_available: false,
+      adaptive_weekly_overdraft_unavailable_reason: "host_schema_v2_required",
+    });
+
+    render(<OtherSettingsWorkspace onAPIError={() => undefined} onNotice={() => undefined} />);
+    const workspace = await screen.findByRole("region", { name: "其他配置" });
+    await user.click(within(workspace).getByRole("tab", { name: "实验性功能" }));
+    const panel = within(workspace).getByRole("tabpanel", { name: "实验性功能" });
+    expect(within(panel).getByRole("checkbox", { name: "Codex 自适应最大透支" })).toBeDisabled();
+    expect(within(panel).getByText("需要 CPA 请求生命周期 schema v2；当前主机不支持此模式。")).toBeInTheDocument();
   });
 });

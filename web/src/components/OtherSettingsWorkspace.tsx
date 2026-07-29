@@ -3,7 +3,7 @@ import {
   BellRing,
   ExternalLink,
   FlaskConical,
-	KeyRound,
+  KeyRound,
   LoaderCircle,
   PackageCheck,
   RefreshCw,
@@ -50,6 +50,7 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [confirmAutoUpdate, setConfirmAutoUpdate] = useState(false);
   const [weeklyOverdraftEnabled, setWeeklyOverdraftEnabled] = useState(false);
+  const [adaptiveWeeklyOverdraftEnabled, setAdaptiveWeeklyOverdraftEnabled] = useState(false);
   const [agentIdentityEnabled, setAgentIdentityEnabled] = useState(false);
   const [error, setError] = useState("");
   const attemptedUpdate = useRef("");
@@ -109,6 +110,7 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
   useEffect(() => {
     if (!experiments?.settings) return;
     setWeeklyOverdraftEnabled(experiments.settings.weekly_overdraft_enabled === true);
+    setAdaptiveWeeklyOverdraftEnabled(experiments.settings.adaptive_weekly_overdraft_enabled === true);
     setAgentIdentityEnabled(experiments.settings.agent_identity_enabled === true);
   }, [experiments]);
 
@@ -228,6 +230,7 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
     try {
       const next = await api.saveExperimentalSettings({
         weekly_overdraft_enabled: weeklyOverdraftEnabled,
+        adaptive_weekly_overdraft_enabled: adaptiveWeeklyOverdraftEnabled,
         agent_identity_enabled: agentIdentityEnabled,
         auto_model_whitelist_enabled: true,
       });
@@ -343,7 +346,11 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
                   type="checkbox"
                   checked={weeklyOverdraftEnabled}
                   disabled={loading || savingExperiment || !experiments}
-                  onChange={(event) => setWeeklyOverdraftEnabled(event.target.checked)}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setWeeklyOverdraftEnabled(enabled);
+                    if (enabled) setAdaptiveWeeklyOverdraftEnabled(false);
+                  }}
                   aria-label={tx("ui.codex_weekly_quota_overdraft")}
                 />
                 <b>{tx(weeklyOverdraftEnabled ? "ui.on_2" : "ui.off_2")}</b>
@@ -354,6 +361,42 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
               <div><strong>{tx("ui.automation_behavior")}</strong><span>{tx("ui.weekly_overdraft_automation_behavior")}</span></div>
               <div><strong>{tx("ui.availability_notice")}</strong><span>{tx("ui.weekly_overdraft_availability_notice")}</span></div>
             </div>
+          </div>
+          <div className="experimental-feature-block">
+            <div className="experimental-feature-row">
+              <div className="experimental-feature-copy">
+                <span className="experimental-feature-icon"><FlaskConical size={18} /></span>
+                <div>
+                  <strong>{tx("ui.adaptive_weekly_overdraft")}</strong>
+                  <span>{tx("ui.adaptive_weekly_overdraft_description")}</span>
+                </div>
+              </div>
+              <label className="switch-control experimental-feature-switch">
+                <input
+                  type="checkbox"
+                  checked={adaptiveWeeklyOverdraftEnabled}
+                  disabled={loading || savingExperiment || !experiments || experiments.adaptive_weekly_overdraft_available !== true}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setAdaptiveWeeklyOverdraftEnabled(enabled);
+                    if (enabled) setWeeklyOverdraftEnabled(false);
+                  }}
+                  aria-label={tx("ui.adaptive_weekly_overdraft")}
+                />
+                <b>{tx(adaptiveWeeklyOverdraftEnabled ? "ui.on_2" : "ui.off_2")}</b>
+              </label>
+            </div>
+            <div className="experimental-behavior-list">
+              <div><strong>{tx("ui.request_behavior")}</strong><span>{tx("ui.adaptive_weekly_overdraft_request_behavior")}</span></div>
+              <div><strong>{tx("ui.automation_behavior")}</strong><span>{tx("ui.adaptive_weekly_overdraft_automation_behavior")}</span></div>
+              <div><strong>{tx("ui.availability_notice")}</strong><span>{tx("ui.adaptive_weekly_overdraft_availability_notice")}</span></div>
+            </div>
+            {experiments?.adaptive_weekly_overdraft_unavailable_reason === "host_schema_v2_required" ? (
+              <div className="experimental-storage-error" role="note"><AlertTriangle size={16} /><span>{tx("ui.adaptive_weekly_overdraft_host_schema_required")}</span></div>
+            ) : null}
+            {experiments?.configuration_warning ? (
+              <div className="experimental-storage-error" role="note"><AlertTriangle size={16} /><span>{tx("ui.adaptive_weekly_overdraft_configuration_warning")}</span></div>
+            ) : null}
           </div>
           <div className="experimental-feature-block">
             <div className="experimental-feature-row">

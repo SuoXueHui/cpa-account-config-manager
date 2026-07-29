@@ -1010,12 +1010,16 @@ export interface CPAServerVersionSnapshot {
 
 export interface ExperimentalSettings {
   weekly_overdraft_enabled: boolean;
+  adaptive_weekly_overdraft_enabled?: boolean;
   agent_identity_enabled: boolean;
   auto_model_whitelist_enabled: boolean;
 }
 
 export interface ExperimentalSettingsSnapshot {
   settings: ExperimentalSettings;
+  adaptive_weekly_overdraft_available?: boolean;
+  adaptive_weekly_overdraft_unavailable_reason?: string;
+  configuration_warning?: string;
   storage_error?: string;
 }
 
