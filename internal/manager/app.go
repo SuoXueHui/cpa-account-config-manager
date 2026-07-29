@@ -443,6 +443,7 @@ func (a *App) ManagementRegistration() cpaapi.ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/updates/check", Description: "Record an immediate CPA plugin-store update check."},
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/experiments", Description: "Read removable experimental feature settings."},
 			{Method: http.MethodPut, Path: managementRoutePrefix + "/experiments", Description: "Persist removable experimental feature settings."},
+			{Method: http.MethodGet, Path: managementRoutePrefix + "/experiments/adaptive-weekly-overdraft", Description: "Read sanitized adaptive weekly-overdraft account state."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/experiments/agent-identity/session-login", Description: "Convert one explicitly submitted ChatGPT Session JSON into a pending Agent Identity login credential."},
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/operations", Description: "List the persistent sanitized account-manager operation journal."},
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/operations/export", Description: "Export the sanitized operation journal as JSON, CSV, or JSON Lines."},
@@ -610,6 +611,8 @@ func (a *App) HandleManagement(ctx context.Context, req cpaapi.ManagementRequest
 		return jsonResponse(http.StatusOK, a.experiments.Snapshot())
 	case method == http.MethodPut && path == "/v0/management"+managementRoutePrefix+"/experiments":
 		return a.handlePutExperimentalSettings(req)
+	case method == http.MethodGet && path == "/v0/management"+managementRoutePrefix+"/experiments/adaptive-weekly-overdraft":
+		return jsonResponse(http.StatusOK, a.adaptiveOverdraft.ManagementSnapshot())
 	case method == http.MethodPost && path == "/v0/management"+managementRoutePrefix+"/experiments/agent-identity/session-login":
 		return a.handleAgentIdentitySessionLogin(ctx, req)
 	case method == http.MethodGet && path == "/v0/management"+managementRoutePrefix+"/operations":

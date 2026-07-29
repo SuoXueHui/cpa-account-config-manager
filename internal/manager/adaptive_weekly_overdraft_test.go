@@ -89,6 +89,66 @@ func TestAccountListProjectsSanitizedAdaptiveOverdraftState(t *testing.T) {
 	}
 }
 
+func TestAdaptiveWeeklyOverdraftManagementReturnsSanitizedAccountState(t *testing.T) {
+	now := time.Date(2026, 7, 29, 10, 30, 0, 0, time.UTC)
+	app := NewApp(&fakeAuthHost{}, []byte("index"))
+	defer app.Close()
+	app.ConfigureHost([]byte("data_dir: "+t.TempDir()+"\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n"), cpaapi.SchemaVersion)
+	app.adaptiveOverdraft.now = func() time.Time { return now }
+	app.adaptiveOverdraft.ObserveAccounts([]Account{adaptiveTestAccount("account-1", "secret-stable-auth", 100, now)})
+	app.adaptiveOverdraft.mu.Lock()
+	record := app.adaptiveOverdraft.records[adaptiveAuthFingerprint("secret-stable-auth")]
+	record.Phase = AdaptivePhaseActiveS2
+	record.Strategy = AdaptiveStrategyS2
+	record.PostThresholdSuccesses = 183
+	record.PostThresholdTokens = 14_800_000
+	app.adaptiveOverdraft.records[record.Fingerprint] = record
+	app.adaptiveOverdraft.mu.Unlock()
+
+	response := app.HandleManagement(context.Background(), cpaapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/cpa-account-config-manager/experiments/adaptive-weekly-overdraft",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.StatusCode, response.Body)
+	}
+	var snapshot AdaptiveWeeklyOverdraftManagementSnapshot
+	if errDecode := json.Unmarshal(response.Body, &snapshot); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if !snapshot.Available || snapshot.HostSchemaVersion != cpaapi.SchemaVersion || snapshot.RequiredSchemaVersion != cpaapi.SchemaVersion || len(snapshot.Accounts) != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	account := snapshot.Accounts[0]
+	if account.AccountID != "account-1" || account.Phase != AdaptivePhaseActiveS2 || account.Strategy != AdaptiveStrategyS2 || account.PostThresholdSuccesses != 183 || account.PostThresholdTokens != 14_800_000 {
+		t.Fatalf("account = %#v", account)
+	}
+	serialized := string(response.Body)
+	if strings.Contains(serialized, "secret-stable-auth") || strings.Contains(serialized, adaptiveAuthFingerprint("secret-stable-auth")) || strings.Contains(serialized, "RequestID") {
+		t.Fatalf("response leaked internal identity = %s", serialized)
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftManagementReportsLegacyUnavailable(t *testing.T) {
+	app := NewApp(&fakeAuthHost{}, []byte("index"))
+	defer app.Close()
+	app.ConfigureHost([]byte("data_dir: "+t.TempDir()+"\n"), cpaapi.LegacySchemaVersion)
+	response := app.HandleManagement(context.Background(), cpaapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/cpa-account-config-manager/experiments/adaptive-weekly-overdraft",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.StatusCode, response.Body)
+	}
+	var snapshot AdaptiveWeeklyOverdraftManagementSnapshot
+	if errDecode := json.Unmarshal(response.Body, &snapshot); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if snapshot.Available || snapshot.UnavailableReason != "host_schema_v2_required" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
 func TestAdaptiveAutomaticDisableProbeUsesFallbackWithoutConsumingStrategy(t *testing.T) {
 	now := time.Date(2026, 7, 29, 11, 0, 0, 0, time.UTC)
 	calls := make([]ModelTestRequest, 0, 3)
