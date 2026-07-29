@@ -34,12 +34,14 @@ var (
 )
 
 type ModelTestRequest struct {
-	AccountID                   string `json:"account_id"`
-	Model                       string `json:"model,omitempty"`
-	ExperimentalWeeklyOverdraft bool   `json:"experimental_weekly_overdraft,omitempty"`
-	Inspection                  bool   `json:"-"`
-	DetectRestrictedModels      bool   `json:"-"`
-	SelectPolicyFallback        bool   `json:"-"`
+	AccountID                           string                    `json:"account_id"`
+	Model                               string                    `json:"model,omitempty"`
+	ExperimentalWeeklyOverdraft         bool                      `json:"experimental_weekly_overdraft,omitempty"`
+	ExperimentalAdaptiveWeeklyOverdraft bool                      `json:"experimental_adaptive_weekly_overdraft,omitempty"`
+	AdaptiveWeeklyOverdraftStrategy     AdaptiveOverdraftStrategy `json:"adaptive_weekly_overdraft_strategy,omitempty"`
+	Inspection                          bool                      `json:"-"`
+	DetectRestrictedModels              bool                      `json:"-"`
+	SelectPolicyFallback                bool                      `json:"-"`
 }
 
 type ModelTestResult struct {
@@ -86,9 +88,10 @@ type ModelTestAttempt struct {
 }
 
 type ModelTestExperiment struct {
-	Name    string `json:"name"`
-	Applied bool   `json:"applied"`
-	CallID  string `json:"call_id,omitempty"`
+	Name     string                    `json:"name"`
+	Applied  bool                      `json:"applied"`
+	CallID   string                    `json:"call_id,omitempty"`
+	Strategy AdaptiveOverdraftStrategy `json:"strategy,omitempty"`
 }
 
 type ModelTestResponsePreview struct {
@@ -112,6 +115,7 @@ type ModelTestService struct {
 	semaphore               chan struct{}
 	now                     func() time.Time
 	experimentalTransformer RequestTransformer
+	adaptiveTransformer     *AdaptiveWeeklyOverdraftExperiment
 }
 
 type credentialUsageObserver interface {
@@ -287,6 +291,13 @@ func (s *ModelTestService) SetExperimentalTransformer(transformer RequestTransfo
 	s.experimentalTransformer = transformer
 }
 
+func (s *ModelTestService) SetAdaptiveTransformer(transformer *AdaptiveWeeklyOverdraftExperiment) {
+	if s == nil {
+		return
+	}
+	s.adaptiveTransformer = transformer
+}
+
 func (s *ModelTestService) SetAgentIdentityExperiment(experiment *AgentIdentityExperiment) {
 	if s == nil {
 		return
@@ -295,6 +306,9 @@ func (s *ModelTestService) SetAgentIdentityExperiment(experiment *AgentIdentityE
 }
 
 func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, managementBaseURL, managementKey string, hostCallbackID ...string) (ModelTestResult, error) {
+	if request.ExperimentalWeeklyOverdraft && request.ExperimentalAdaptiveWeeklyOverdraft {
+		return ModelTestResult{}, ErrOverdraftModesMutuallyExclusive
+	}
 	accountID := safeOperationIdentifier(request.AccountID, 256)
 	if accountID == "" {
 		return ModelTestResult{}, fmt.Errorf("account_id is required and must be at most 256 characters")
@@ -337,7 +351,7 @@ func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, ma
 		Model:     model,
 		TestedAt:  startedAt,
 	}
-	if request.ExperimentalWeeklyOverdraft && (probeProvider != "codex" || metadata.usesAPIKey()) {
+	if request.overdraftExperimentRequested() && (probeProvider != "codex" || metadata.usesAPIKey()) {
 		return ModelTestResult{}, fmt.Errorf("weekly overdraft experiment requires a Codex OAuth account")
 	}
 	probe, selectedModel, supported, errProbe := buildModelProbe(probeProvider, model, metadata)
@@ -380,7 +394,7 @@ func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, ma
 	// Inspection must use the Codex credential endpoint even when CPA runtime
 	// metadata says api_key. The runtime label can be stale or describe the
 	// routing adapter rather than the physical auth file.
-	if probeProvider == "codex" && !request.ExperimentalWeeklyOverdraft && (request.Inspection || !metadata.usesAPIKey()) {
+	if probeProvider == "codex" && !request.overdraftExperimentRequested() && (request.Inspection || !metadata.usesAPIKey()) {
 		credential := buildCodexCredentialProbe(metadata)
 		credentialResponse, errCredential := s.callAccountProbe(probeCtx, managementBaseURL, managementKey, callbackID, account, credential)
 		if errCredential == nil {
@@ -426,6 +440,22 @@ func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, ma
 		}
 		probe.data = string(modification.Body)
 		result.Experiment = &ModelTestExperiment{Name: "weekly_overdraft", Applied: true, CallID: callID}
+	} else if request.ExperimentalAdaptiveWeeklyOverdraft {
+		if s.adaptiveTransformer == nil || adaptiveStrategyPairCount(request.AdaptiveWeeklyOverdraftStrategy) == 0 {
+			return ModelTestResult{}, fmt.Errorf("adaptive weekly overdraft experiment is unavailable")
+		}
+		modification, changed := s.adaptiveTransformer.InterceptRequestForStrategy(cpaapi.RequestInterceptRequest{
+			ToFormat: "codex", Body: []byte(probe.data),
+		}, request.AdaptiveWeeklyOverdraftStrategy, false)
+		callID := experimentalToolCallID(modification.Body)
+		if !changed || len(modification.Body) == 0 || callID == "" {
+			return ModelTestResult{}, fmt.Errorf("adaptive weekly overdraft experiment could not be applied")
+		}
+		probe.data = string(modification.Body)
+		result.Experiment = &ModelTestExperiment{
+			Name: "adaptive_weekly_overdraft", Applied: true, CallID: callID,
+			Strategy: request.AdaptiveWeeklyOverdraftStrategy,
+		}
 	}
 
 	runAttempt := func(role, attemptModel string, attemptProbe modelProbe, experiment *ModelTestExperiment) (ModelTestAttempt, modelProbeHTTPResponse, error) {
@@ -476,7 +506,7 @@ func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, ma
 
 	primaryAttempt, primaryResponse, primaryErr := runAttempt("primary", selectedModel, probe, result.Experiment)
 	applyAttempt(primaryAttempt)
-	if primaryErr != nil || request.ExperimentalWeeklyOverdraft || !shouldFallbackCodexModel(probe, selectedModel, primaryResponse) {
+	if primaryErr != nil || request.overdraftExperimentRequested() || !shouldFallbackCodexModel(probe, selectedModel, primaryResponse) {
 		return result, nil
 	}
 	fallbackProbe, fallbackModel, fallbackSupported, errFallback := buildModelProbe(probeProvider, defaultCodexFallbackModel, metadata)
@@ -507,6 +537,7 @@ func (s *ModelTestService) Run(ctx context.Context, request ModelTestRequest, ma
 	return result, nil
 }
 
+<<<<<<< HEAD
 func (s *ModelTestService) observeNormalQuotaFailure(accountID, quotaWindow, reason string, testedAt time.Time, experimental bool) {
 	if s == nil || experimental || safeModelProbeReason(reason) != "quota_limited" || s.overdraft == nil {
 		return
@@ -516,6 +547,10 @@ func (s *ModelTestService) observeNormalQuotaFailure(accountID, quotaWindow, rea
 		return
 	}
 	s.overdraft.BeginOverdraftCycle(accountID, quotaWindow, testedAt)
+}
+
+func (r ModelTestRequest) overdraftExperimentRequested() bool {
+	return r.ExperimentalWeeklyOverdraft || r.ExperimentalAdaptiveWeeklyOverdraft
 }
 
 func shouldFallbackCodexModel(probe modelProbe, model string, response modelProbeHTTPResponse) bool {

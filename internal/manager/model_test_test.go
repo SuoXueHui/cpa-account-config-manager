@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -682,6 +683,167 @@ func TestNormalQuotaProbeFreezesOverdraftBaselineButExperimentalProbeDoesNot(t *
 	}
 	if afterExperimental := usage.Snapshot("overdraft-auth").Codex.FiveHour; afterExperimental.OverdraftActive {
 		t.Fatalf("experimental quota probe started a new cycle: %#v", afterExperimental)
+	}
+}
+
+func TestHandleAccountModelTestRunsExplicitAdaptiveStrategy(t *testing.T) {
+	host := &fakeAuthHost{
+		entries: []cpaapi.HostAuthFileEntry{{
+			ID: "stable-auth-1", AuthIndex: "auth-1", Name: "adaptive.json", Provider: "codex", Type: "codex",
+			AccountType: "oauth", Source: "file", Path: "/auths/adaptive.json",
+		}},
+		details: map[string]cpaapi.HostAuthGetResponse{
+			"auth-1": {
+				AuthIndex: "auth-1", Name: "adaptive.json", Path: "/auths/adaptive.json",
+				JSON: json.RawMessage(`{"type":"codex","access_token":"upstream-secret","account_id":"workspace-123"}`),
+			},
+		},
+	}
+	var received managementAPICallRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if errDecode := json.NewDecoder(request.Body).Decode(&received); errDecode != nil {
+			t.Errorf("decode management request: %v", errDecode)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(managementAPICallResponse{
+			StatusCode: http.StatusOK,
+			Header:     map[string][]string{"Content-Type": {"text/event-stream"}},
+			Body:       "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-adaptive\"}}\n\n",
+		})
+	}))
+	defer server.Close()
+
+	app := NewApp(host, []byte("index"))
+	app.modelTests.doer = server.Client()
+	sequence := 0
+	app.adaptiveOverdraft.newCallID = func(strategy AdaptiveOverdraftStrategy) (string, bool) {
+		sequence++
+		return "call_cpa_adaptive_" + string(strategy) + "_test" + strconv.Itoa(sequence), true
+	}
+	app.Configure([]byte("data_dir: " + t.TempDir() + "\nmanagement_base_url: " + server.URL + "\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n"))
+	defer app.Close()
+
+	body, _ := json.Marshal(ModelTestRequest{
+		AccountID: "auth-1", Model: "gpt-5.4", ExperimentalAdaptiveWeeklyOverdraft: true,
+		AdaptiveWeeklyOverdraftStrategy: AdaptiveStrategyS2,
+	})
+	response := app.HandleManagement(context.Background(), cpaapi.ManagementRequest{
+		Method: http.MethodPost, Path: "/v0/management/plugins/cpa-account-config-manager/accounts/model-test",
+		Headers: http.Header{"Authorization": {"Bearer management-secret"}}, Body: body,
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("adaptive model test = %d %s", response.StatusCode, response.Body)
+	}
+	var result ModelTestResult
+	if errDecode := json.Unmarshal(response.Body, &result); errDecode != nil {
+		t.Fatalf("decode result: %v", errDecode)
+	}
+	if result.Experiment == nil || !result.Experiment.Applied || result.Experiment.Name != "adaptive_weekly_overdraft" || result.Experiment.Strategy != AdaptiveStrategyS2 {
+		t.Fatalf("experiment result = %#v", result.Experiment)
+	}
+	var payload struct {
+		Input []struct {
+			Type   string `json:"type"`
+			CallID string `json:"call_id"`
+		} `json:"input"`
+	}
+	if errDecode := json.Unmarshal([]byte(received.Data), &payload); errDecode != nil {
+		t.Fatalf("decode adaptive probe data: %v", errDecode)
+	}
+	if len(payload.Input) != 5 {
+		t.Fatalf("adaptive input items = %d body=%s", len(payload.Input), received.Data)
+	}
+	for index := 1; index < len(payload.Input); index += 2 {
+		if payload.Input[index].Type != "custom_tool_call" || payload.Input[index+1].Type != "custom_tool_call_output" || payload.Input[index].CallID != payload.Input[index+1].CallID {
+			t.Fatalf("adaptive pair %d = %#v / %#v", index, payload.Input[index], payload.Input[index+1])
+		}
+	}
+	state, ok := app.adaptiveOverdraft.stateForAuthID("stable-auth-1")
+	if !ok || state.Phase != AdaptivePhaseActiveS2 || state.Strategy != AdaptiveStrategyS2 {
+		t.Fatalf("adaptive state = %#v", state)
+	}
+	request := adaptiveTransformRequest("normal-request", "stable-auth-1", `{"input":[{"type":"message","role":"user","content":"continue"}]}`)
+	if transformed, changed := app.adaptiveOverdraft.InterceptRequest(request); changed || len(transformed.Body) != 0 {
+		t.Fatalf("manual test armed below-threshold traffic: changed=%v body=%s", changed, transformed.Body)
+	}
+}
+
+func TestHandleAccountModelTestRejectsConflictingOverdraftModes(t *testing.T) {
+	app := NewApp(&fakeAuthHost{}, []byte("index"))
+	app.Configure([]byte("data_dir: " + t.TempDir() + "\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n"))
+	defer app.Close()
+	body, _ := json.Marshal(ModelTestRequest{
+		AccountID: "auth-1", Model: "gpt-5.4", ExperimentalWeeklyOverdraft: true,
+		ExperimentalAdaptiveWeeklyOverdraft: true, AdaptiveWeeklyOverdraftStrategy: AdaptiveStrategyS1,
+	})
+	response := app.HandleManagement(context.Background(), cpaapi.ManagementRequest{
+		Method: http.MethodPost, Path: "/v0/management/plugins/cpa-account-config-manager/accounts/model-test",
+		Headers: http.Header{"Authorization": {"Bearer management-secret"}}, Body: body,
+	})
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(response.Body), "mutually exclusive") {
+		t.Fatalf("response = %d %s", response.StatusCode, response.Body)
+	}
+}
+
+func TestHandleAccountModelTestRunsAdaptiveStrategyLadder(t *testing.T) {
+	host := &fakeAuthHost{
+		entries: []cpaapi.HostAuthFileEntry{{
+			ID: "stable-auth-1", AuthIndex: "auth-1", Name: "adaptive-ladder.json", Provider: "codex", Type: "codex",
+			AccountType: "oauth", Source: "file", Path: "/auths/adaptive-ladder.json",
+		}},
+		details: map[string]cpaapi.HostAuthGetResponse{
+			"auth-1": {
+				AuthIndex: "auth-1", Name: "adaptive-ladder.json", Path: "/auths/adaptive-ladder.json",
+				JSON: json.RawMessage(`{"type":"codex","access_token":"upstream-secret","account_id":"workspace-123"}`),
+			},
+		},
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		var received managementAPICallRequest
+		if errDecode := json.NewDecoder(request.Body).Decode(&received); errDecode != nil {
+			t.Errorf("decode management request: %v", errDecode)
+		}
+		var payload struct {
+			Input []json.RawMessage `json:"input"`
+		}
+		if errDecode := json.Unmarshal([]byte(received.Data), &payload); errDecode != nil {
+			t.Errorf("decode adaptive payload: %v", errDecode)
+		}
+		statusCode := http.StatusTooManyRequests
+		body := managementAPICallBody(`{"error":{"type":"usage_limit_reached"}}`)
+		if len(payload.Input) == 5 {
+			statusCode = http.StatusOK
+			body = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-adaptive-s2\"}}\n\n"
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(managementAPICallResponse{StatusCode: statusCode, Body: body})
+	}))
+	defer server.Close()
+
+	app := NewApp(host, []byte("index"))
+	app.modelTests.doer = server.Client()
+	app.Configure([]byte("data_dir: " + t.TempDir() + "\nmanagement_base_url: " + server.URL + "\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n"))
+	defer app.Close()
+	body, _ := json.Marshal(ModelTestRequest{AccountID: "auth-1", Model: "gpt-5.4", ExperimentalAdaptiveWeeklyOverdraft: true})
+	response := app.HandleManagement(context.Background(), cpaapi.ManagementRequest{
+		Method: http.MethodPost, Path: "/v0/management/plugins/cpa-account-config-manager/accounts/model-test",
+		Headers: http.Header{"Authorization": {"Bearer management-secret"}}, Body: body,
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("adaptive ladder = %d %s", response.StatusCode, response.Body)
+	}
+	var result ModelTestResult
+	if errDecode := json.Unmarshal(response.Body, &result); errDecode != nil {
+		t.Fatalf("decode result: %v", errDecode)
+	}
+	if calls != 2 || result.Status != "available" || result.Experiment == nil || result.Experiment.Strategy != AdaptiveStrategyS2 || len(result.Attempts) != 2 {
+		t.Fatalf("calls=%d result=%#v", calls, result)
+	}
+	state, ok := app.adaptiveOverdraft.stateForAuthID("stable-auth-1")
+	if !ok || state.Phase != AdaptivePhaseActiveS2 || state.Strategy != AdaptiveStrategyS2 {
+		t.Fatalf("adaptive state = %#v", state)
 	}
 }
 

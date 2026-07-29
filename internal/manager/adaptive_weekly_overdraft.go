@@ -47,6 +47,7 @@ type adaptiveOverdraftRecord struct {
 	LastSuccessAt            time.Time                 `json:"last_success_at,omitempty"`
 	LastFailureAt            time.Time                 `json:"last_failure_at,omitempty"`
 	LastObservedAt           time.Time                 `json:"last_observed_at,omitempty"`
+	QuotaObservedAt          time.Time                 `json:"quota_observed_at,omitempty"`
 	ResetAt                  time.Time                 `json:"reset_at,omitempty"`
 	HardStopReason           string                    `json:"hard_stop_reason,omitempty"`
 }
@@ -227,6 +228,7 @@ func (e *AdaptiveWeeklyOverdraftExperiment) ObserveUsage(record cpaapi.UsageReco
 				state.Strategy = AdaptiveStrategyS1
 			}
 			state.ResetAt = evidence.RecoverAfter.UTC()
+			state.QuotaObservedAt = now
 			changed = true
 		}
 	}
@@ -283,6 +285,7 @@ func (e *AdaptiveWeeklyOverdraftExperiment) ObserveCompletion(completion cpaapi.
 			if state.Phase != AdaptivePhaseHardStopped && state.Phase != AdaptivePhaseExhausted && state.Strategy == request.Strategy {
 				advanceAdaptiveStrategy(&state)
 				state.LastFailureAt = now
+				state.QuotaObservedAt = now
 				changed = true
 			}
 		}
@@ -342,6 +345,124 @@ func (e *AdaptiveWeeklyOverdraftExperiment) SummaryForAuthID(authID string) *Ada
 		PostThresholdSuccesses: record.PostThresholdSuccesses, PostThresholdTokens: record.PostThresholdTokens,
 		LastSuccessAt: adaptiveTimePointer(record.LastSuccessAt), LastFailureAt: adaptiveTimePointer(record.LastFailureAt),
 		ResetAt: adaptiveTimePointer(record.ResetAt), HardStopReason: sanitizeAdaptiveHardStopReason(record.HardStopReason),
+	}
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) AllowUsageAutoDisable(record cpaapi.UsageRecord, now time.Time) bool {
+	if !e.RequestInterceptionActive() || !record.Failed {
+		return true
+	}
+	evidence := classifyUsageFailure(record, now.UTC())
+	return adaptiveFailureClass(record.Failure.StatusCode, evidence) != "weekly_quota"
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) AllowInspectionAutoDisable(result InspectionResult) bool {
+	if !e.RequestInterceptionActive() || result.ReasonCode != "quota_exhausted" && result.ReasonCode != "quota_limited" {
+		return true
+	}
+	if result.QuotaWindow != InspectionQuotaWindowSevenDay && result.QuotaWindow != InspectionQuotaWindowMultiple {
+		return true
+	}
+	return result.AutoDisableProbeStatus == InspectionAutoDisableProbeFailed
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) AutomaticDisableProbePlan(account Account, result InspectionResult, preferredModel string) (AutomaticDisableProbePlan, bool) {
+	if !e.RequestInterceptionActive() || adaptiveAuthFingerprint(account.AuthID) == "" ||
+		(result.ReasonCode != "quota_exhausted" && result.ReasonCode != "quota_limited") ||
+		(result.QuotaWindow != InspectionQuotaWindowSevenDay && result.QuotaWindow != InspectionQuotaWindowMultiple) ||
+		!adaptiveAccountProviderEligible(account) {
+		return AutomaticDisableProbePlan{}, false
+	}
+	return AutomaticDisableProbePlan{
+		Name: "adaptive_weekly_overdraft", AttemptLimit: 9,
+		Models:     []string{preferredModel, defaultCodexFallbackModel, codexCompatibilityMiniModel},
+		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
+		Request: ModelTestRequest{
+			ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true, SelectPolicyFallback: true,
+		},
+		Observe: func(strategy AdaptiveOverdraftStrategy, probe ModelTestResult) {
+			e.ObserveProbeResult(account.AuthID, strategy, probe)
+		},
+	}, true
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) ObserveProbeResult(authID string, strategy AdaptiveOverdraftStrategy, result ModelTestResult) {
+	if e == nil || adaptiveStrategyPairCount(strategy) == 0 {
+		return
+	}
+	fingerprint := adaptiveAuthFingerprint(authID)
+	if fingerprint == "" {
+		return
+	}
+	e.observeProbeResult(fingerprint, strategy, result)
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) ObserveProbeResultForAccountID(accountID string, strategy AdaptiveOverdraftStrategy, result ModelTestResult) {
+	if e == nil || adaptiveStrategyPairCount(strategy) == 0 {
+		return
+	}
+	e.mu.RLock()
+	fingerprint := e.authIndex[strings.TrimSpace(accountID)]
+	e.mu.RUnlock()
+	if fingerprint == "" {
+		return
+	}
+	e.observeProbeResult(fingerprint, strategy, result)
+}
+
+func (e *AdaptiveWeeklyOverdraftExperiment) observeProbeResult(fingerprint string, strategy AdaptiveOverdraftStrategy, result ModelTestResult) {
+	now := result.TestedAt.UTC()
+	if now.IsZero() {
+		now = e.currentTime()
+	}
+	e.mu.Lock()
+	record, exists := e.records[fingerprint]
+	if !exists {
+		e.ensureRecordCapacityLocked(now)
+		record = adaptiveOverdraftRecord{Fingerprint: fingerprint, Phase: AdaptivePhaseArmed, Strategy: strategy}
+	}
+	changed := false
+	switch {
+	case result.Status == "available":
+		record.Phase = adaptiveActivePhase(strategy)
+		record.Strategy = strategy
+		record.LastSuccessAt = now
+		record.HardStopReason = ""
+		changed = true
+	case adaptiveProbeHardStop(result):
+		record.Phase = AdaptivePhaseHardStopped
+		record.HardStopReason = adaptiveHardStopReason(result.StatusCode, result.ReasonCode)
+		record.LastFailureAt = now
+		changed = true
+	case adaptiveProbeDefinitiveQuota(result):
+		if record.Phase != AdaptivePhaseHardStopped && record.Phase != AdaptivePhaseExhausted &&
+			adaptiveStrategyRank(strategy) >= adaptiveStrategyRank(record.Strategy) {
+			record.Strategy = strategy
+			advanceAdaptiveStrategy(&record)
+			record.LastFailureAt = now
+			record.QuotaObservedAt = now
+			changed = true
+		}
+	}
+	if changed {
+		record.LastObservedAt = now
+		e.records[fingerprint] = record
+		e.dirty = true
+	}
+	e.mu.Unlock()
+	e.persist(false)
+}
+
+func adaptiveStrategyRank(strategy AdaptiveOverdraftStrategy) int {
+	switch strategy {
+	case AdaptiveStrategyS1:
+		return 1
+	case AdaptiveStrategyS2:
+		return 2
+	case AdaptiveStrategyS4:
+		return 3
+	default:
+		return 0
 	}
 }
 
@@ -477,12 +598,14 @@ func applyAdaptiveQuotaObservation(record *adaptiveOverdraftRecord, usage *Accou
 	}
 	before := *record
 	record.LastObservedAt = observedAt
+	record.QuotaObservedAt = observedAt
 	if usage.Codex.SevenDay.ResetAt != nil {
 		record.ResetAt = usage.Codex.SevenDay.ResetAt.UTC()
 	}
 	if usage.Codex.SevenDay.UsedPercent < adaptiveOverdraftQuotaThreshold {
 		resetAdaptiveOverdraftRecord(record)
 		record.LastObservedAt = observedAt
+		record.QuotaObservedAt = observedAt
 		if usage.Codex.SevenDay.ResetAt != nil {
 			record.ResetAt = usage.Codex.SevenDay.ResetAt.UTC()
 		}
@@ -500,7 +623,7 @@ func adaptiveRecordCountsPostThresholdSuccess(record adaptiveOverdraftRecord, no
 	if record.Phase == AdaptivePhaseIdle || record.Phase == AdaptivePhaseHardStopped || record.Phase == AdaptivePhaseExhausted {
 		return false
 	}
-	return !record.LastObservedAt.IsZero() && now.Sub(record.LastObservedAt) <= adaptiveOverdraftQuotaFreshness
+	return !record.QuotaObservedAt.IsZero() && now.Sub(record.QuotaObservedAt) <= adaptiveOverdraftQuotaFreshness
 }
 
 func resetAdaptiveOverdraftRecord(record *adaptiveOverdraftRecord) {

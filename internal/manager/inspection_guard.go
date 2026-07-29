@@ -24,7 +24,9 @@ type AutomaticDisableProbePlan struct {
 	Name         string
 	AttemptLimit int
 	Models       []string
+	Strategies   []AdaptiveOverdraftStrategy
 	Request      ModelTestRequest
+	Observe      func(AdaptiveOverdraftStrategy, ModelTestResult)
 }
 
 type automaticDisableProbeRunner func(context.Context, ModelTestRequest, string, string) (ModelTestResult, error)
