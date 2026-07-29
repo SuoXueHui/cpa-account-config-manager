@@ -18,7 +18,7 @@
 | 账号巡检 | 结合 CPA 原生状态、Usage 记录、主动模型测试和被动失败进行全量巡检，实时展示进度、健康证据、恢复时间和建议操作，并支持批量执行建议。 |
 | 自动处置 | 可选自动禁用失败或额度耗尽账号、在恢复后启用由巡检自身禁用的账号，并对严格符合条件且经过风险确认和宽限期的账号执行自动删除。 |
 | 插件与 CPA 版本检测 | 从 CPA 插件商店检查并安装插件更新，同时展示当前 CPA 服务端版本和可用的新版本。CPA 主程序只做版本检测，插件不会自行替换 CPA 可执行文件。 |
-| Codex 5h / 7d 额度透支 | 实验性额度透支功能会利用最后一条消息为 tool call 时可继续生成的行为；5 小时或 7 天额度耗尽后，自动禁用前最多进行 5 次可用性验证，任意一次成功就保留账号。 |
+| Codex 5h / 7d 额度透支 | 保留作者原有的固定透支模式，并新增按账号、额度和请求结果选择 S1/S2/S4 的自适应模式；两种实验模式分别控制且互斥。 |
 | Agent Identity 与 PAT | 实验性支持 Codex Agent Identity 和 Personal Access Token 的导入、转换、登录和 CPA 原生插件鉴权路径，并兼容常见 sub2api 结构。 |
 | 用量与异常通知 | 使用可预览、可测试的 HTTPS GET URL 模板发送通知，可对接 Bark、ntfy 等服务；变量可组合账号总数、可用账号数、可用率、异常占比、额度受限数量和触发时间。 |
 | 额度重置 | 自动读取 Codex 套餐和主动重置次数；账号存在重置次数时，可在二次确认后消耗一次重置并立即刷新套餐、额度和剩余次数。 |
@@ -91,10 +91,31 @@ CPA 加载插件后，在 Management Center 中打开 **CPA-A Manager**。大多
 
 “实验性功能”目前包括：
 
-- Codex 5 小时与 7 天额度透支探测，依赖上游的 tool-call 续写行为。
+- Codex 5 小时与 7 天额度透支探测，包括作者原有模式和独立的自适应最大透支模式，均依赖上游的 tool-call 续写行为。
 - Codex Agent Identity/PAT 转换和鉴权 Hook。
 
-两项功能默认关闭，并通过稳定 Hook 与标准账号管理流程隔离，因此以后可以单独移除实验实现，而无需修改常规路径。
+这些功能默认关闭，并通过稳定 Hook 与标准账号管理流程隔离，因此以后可以单独移除实验实现，而无需修改常规路径。
+
+### Codex 周额度透支模式
+
+两个开关持久化在插件的 `experimental_settings` 中：
+
+```yaml
+experimental_settings:
+  weekly_overdraft_enabled: false
+  adaptive_weekly_overdraft_enabled: false
+```
+
+- `weekly_overdraft_enabled` 是作者原有模式，保持原有请求变换和巡检行为。
+- `adaptive_weekly_overdraft_enabled` 是按账号运行的自适应模式，要求 CPA 请求生命周期 schema v2 能提供稳定的已选中账号和请求完成事件。
+- 两个开关互斥。管理接口会拒绝同时开启；如果旧配置在启动时同时为 `true`，插件优先保留作者模式并关闭自适应模式。
+- 自适应模式只在该账号七日额度达到 `99%`，且额度证据在最近 `15` 分钟内时注入请求。低于阈值、证据过期、非 Codex 请求或无法归属稳定账号时均原样放行。
+- 每个账号从 `s1` 开始，仅在收到明确的七日额度失败后依次升级到 `s2`、`s4`。普通瞬时限流不会升级；HTTP 401 鉴权失败或 HTTP 402/工作区停用会立即停止后续探测。
+- 状态保存在 `<data_dir>/adaptive-weekly-overdraft.json`。文件采用限制性权限，只包含账号指纹、策略、阶段、计数和时间戳，不保存 Auth ID、Token、请求正文或上游响应正文。
+
+若需要回滚到作者模式，在界面中关闭“Codex 自适应最大透支”并开启“Codex 周额度透支续用”，或把配置改为 `weekly_overdraft_enabled: true`、`adaptive_weekly_overdraft_enabled: false` 后重新加载插件配置。若宿主只支持请求生命周期 schema v1，自适应开关不可用，但作者模式仍可使用。
+
+两种模式都依赖上游当前行为，**不保证固定透支量，也不保证一定能够继续生成**；实际结果可能随账号、套餐、工作区状态和上游策略变化。
 
 ## 安全模型
 
@@ -108,7 +129,7 @@ CPA 加载插件后，在 Management Center 中打开 **CPA-A Manager**。大多
 
 ## 兼容性
 
-插件使用 CLIProxyAPI 原生插件 ABI/Schema v1，需要 CPA 支持原生插件发现、Auth list/get/save 回调、Usage Plugin 回调，以及用于 Auth 状态、字段编辑、指定账号 API 调用、删除和插件商店更新的当前鉴权 Management API。
+插件使用 CLIProxyAPI 原生插件 ABI，并兼容请求生命周期 schema v1；自适应最大透支模式单独要求请求生命周期 schema v2。CPA 还需支持原生插件发现、Auth list/get/save 回调、Usage Plugin 回调，以及用于 Auth 状态、字段编辑、指定账号 API 调用、删除和插件商店更新的当前鉴权 Management API。
 
 插件不导入 CLIProxyAPI Go 包，也不会修改 CPA 可执行文件。
 
