@@ -217,8 +217,9 @@ function AccountManagerApp() {
   const [modelTestResult, setModelTestResult] = useState<ModelTestResult | null>(null);
   const [modelTesting, setModelTesting] = useState(false);
   const [modelTestError, setModelTestError] = useState("");
-  const [modelTestExperimentalAvailable, setModelTestExperimentalAvailable] = useState(false);
   const [weeklyOverdraftEnabled, setWeeklyOverdraftEnabled] = useState(false);
+  const [modelTestOriginalOverdraftAvailable, setModelTestOriginalOverdraftAvailable] = useState(false);
+  const [modelTestAdaptiveOverdraftAvailable, setModelTestAdaptiveOverdraftAvailable] = useState(false);
   const modelTestExperimentRequest = useRef(0);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [deletePreview, setDeletePreview] = useState<AccountDeletePreview | null>(null);
@@ -748,10 +749,16 @@ function AccountManagerApp() {
     setModelTestTarget(account);
     setModelTestResult(null);
     setModelTestError("");
-    setModelTestExperimentalAvailable(weeklyOverdraftEnabled);
+    setModelTestOriginalOverdraftAvailable(false);
+    setModelTestAdaptiveOverdraftAvailable(false);
     void api.getExperimentalSettings().then((snapshot) => {
       if (modelTestExperimentRequest.current !== requestID) return;
-      setModelTestExperimentalAvailable(snapshot.settings.weekly_overdraft_enabled === true);
+      setWeeklyOverdraftEnabled(snapshot.settings.weekly_overdraft_enabled === true);
+      setModelTestOriginalOverdraftAvailable(snapshot.settings.weekly_overdraft_enabled === true);
+      setModelTestAdaptiveOverdraftAvailable(
+        snapshot.settings.adaptive_weekly_overdraft_enabled === true
+        && snapshot.adaptive_weekly_overdraft_available === true,
+      );
     }).catch((error) => {
       if (modelTestExperimentRequest.current !== requestID) return;
       if (error instanceof api.APIError && error.status === 401) {
@@ -769,16 +776,17 @@ function AccountManagerApp() {
     setModelTestTarget(null);
     setModelTestResult(null);
     setModelTestError("");
-    setModelTestExperimentalAvailable(false);
+    setModelTestOriginalOverdraftAvailable(false);
+    setModelTestAdaptiveOverdraftAvailable(false);
   };
 
-  const runModelTest = async (model: string, experimentalWeeklyOverdraft = false) => {
+  const runModelTest = async (model: string, mode: api.OverdraftModelTestMode = "none") => {
     if (!modelTestTarget) return;
     setModelTesting(true);
     setModelTestError("");
     setModelTestResult(null);
     try {
-      setModelTestResult(await api.testAccountModel(modelTestTarget.id, model, experimentalWeeklyOverdraft));
+      setModelTestResult(await api.testAccountModel(modelTestTarget.id, model, mode));
     } catch (error) {
       if (error instanceof api.APIError && error.status === 401) {
         setModelTestTarget(null);
@@ -1328,7 +1336,7 @@ function AccountManagerApp() {
 					<p className="confirmation-copy">{tx("ui.confirm_active_reset_description", { account: quotaResetTarget.label || quotaResetTarget.email || quotaResetTarget.name || quotaResetTarget.id })}</p>
 				</Modal>
 			) : null}
-      {modelTestTarget ? <ModelTestDialog key={modelTestTarget.id} account={modelTestTarget} result={modelTestResult} error={modelTestError} testing={modelTesting} experimentalAvailable={modelTestExperimentalAvailable} onClose={closeModelTest} onTest={(model, experimental) => void runModelTest(model, experimental)} /> : null}
+      {modelTestTarget ? <ModelTestDialog key={modelTestTarget.id} account={modelTestTarget} result={modelTestResult} error={modelTestError} testing={modelTesting} originalOverdraftAvailable={modelTestOriginalOverdraftAvailable} adaptiveOverdraftAvailable={modelTestAdaptiveOverdraftAvailable} onClose={closeModelTest} onTest={(model, mode) => void runModelTest(model, mode)} /> : null}
       {deleteTarget ? <DeleteAccountDialog key={deleteTarget.id} account={deleteTarget} preview={deletePreview} previewing={deletePreviewing} deleting={deleting} error={deleteError} onClose={closeDelete} onConfirm={() => void confirmDelete()} /> : null}
       {deduplicationPreview ? <AccountDeduplicationDialog preview={deduplicationPreview} loading={deduplicationLoading} reviewing={deduplicationReviewing} error={deduplicationError} onClose={() => { deduplicationRequest.current++; setDeduplicationPreview(null); setDeduplicationError(""); setDeduplicationLoading(false); }} onOptionsChange={(options) => void loadAccountDeduplication(options, true)} onReview={(ids) => void reviewDuplicateDeletions(ids)} /> : null}
       {preview ? <PreviewDialog preview={preview} starting={starting} error={previewError} onClose={() => { previewPatches.current.delete(preview.id); setPreview(null); setPreviewError(""); }} onConfirm={() => void confirmPreview()} /> : null}

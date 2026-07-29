@@ -313,6 +313,13 @@ const accounts = Array.from({ length: 36 }, (_, index) => {
     next_retry_after: index % 9 === 0 ? new Date(Date.now() + 12 * 60_000).toISOString() : undefined,
     ...(automation ? { automation } : {}),
     ...(usage ? { usage } : {}),
+    ...(provider === "codex" && index % 8 === 4 ? { adaptive_weekly_overdraft: {
+      phase: "active_s2",
+      strategy: "s2",
+      post_threshold_successes: 18 + index,
+      post_threshold_tokens: 128_000 + index * 1_000,
+      last_success_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+    } } : {}),
     updated_at: new Date(Date.now() - index * 43 * 60_000).toISOString(),
   };
 });
@@ -1184,9 +1191,28 @@ const server = http.createServer(async (request, response) => {
     const supported = ["codex", "codex-agent-identity", "openai", "claude", "gemini", "gemini-cli", "gemini-interactions", "aistudio", "xai"].includes(account.provider);
     const now = new Date().toISOString();
     const experimentalOverdraft = Boolean(body.experimental_weekly_overdraft) && ["codex", "codex-agent-identity"].includes(account.provider);
-    const usesFallback = !experimentalOverdraft && supported && ["codex", "codex-agent-identity"].includes(account.provider) && model === defaultOpenAIProbeModel;
+    const adaptiveOverdraft = Boolean(body.experimental_adaptive_weekly_overdraft) && ["codex", "codex-agent-identity"].includes(account.provider);
+    const usesFallback = !experimentalOverdraft && !adaptiveOverdraft && supported && ["codex", "codex-agent-identity"].includes(account.provider) && model === defaultOpenAIProbeModel;
     const selectedModel = usesFallback ? "gpt-5.5" : model;
-    const result = experimentalOverdraft ? {
+    const result = adaptiveOverdraft ? {
+      account_id: account.id,
+      provider: account.provider,
+      model,
+      primary_model: model,
+      status: "available",
+      probe_kind: "model",
+      reason_code: "model_response_ok",
+      status_code: 200,
+      latency_ms: 524,
+      tested_at: now,
+      experiment: { name: "adaptive_weekly_overdraft", applied: true, strategy: "s2", call_id: "call_cpa_adaptive_s2_mock200" },
+      response: {
+        format: "sse",
+        body: "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}",
+        headers: [{ name: "content-type", value: "text/event-stream" }],
+        truncated: false,
+      },
+    } : experimentalOverdraft ? {
       account_id: account.id,
       provider: account.provider,
       model,

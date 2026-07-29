@@ -2,6 +2,7 @@ import { Activity, AlertTriangle, Gauge } from "lucide-react";
 import type { Account, UsageWindowSnapshot } from "../types";
 import { localeFormats, useI18n, type Locale } from "../i18n";
 import type { UIMessageKey } from "../i18n/uiText";
+import { AdaptiveWeeklyOverdraftStatus } from "./AdaptiveWeeklyOverdraftStatus";
 
 export function AccountUsageCell({ account, weeklyOverdraftEnabled = false }: { account: Account; weeklyOverdraftEnabled?: boolean }) {
   const { locale, t, tx, formatDateTime, formatNumber } = useI18n();
@@ -130,6 +131,7 @@ export function AccountUsageCell({ account, weeklyOverdraftEnabled = false }: { 
           <Activity size={10} aria-hidden="true" /><b>{agentIdentity ? tx("ui.cpa_does_not_currently_provide_agent_identity_quota") : tx("ui.awaiting_usage_collection")}</b>
         </div>
       )}
+      <AdaptiveWeeklyOverdraftStatus summary={account.adaptive_weekly_overdraft} />
     </div>
   );
 }

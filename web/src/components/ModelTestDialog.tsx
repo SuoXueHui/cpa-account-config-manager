@@ -1,6 +1,7 @@
 import { Activity, AlertTriangle, CheckCircle2, FlaskConical, LoaderCircle, ShieldQuestion, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Account, ModelTestAttempt, ModelTestResponsePreview, ModelTestResult, ModelTestStatus } from "../types";
+import type { OverdraftModelTestMode } from "../api/client";
 import { technicalLabel } from "../format/accountDisplay";
 import { decodeHTMLCharacterReferences } from "../format/htmlCharacterReferences";
 import { normalizeManualModelTestModel, readManualModelTestPreference, recordManualModelTestModel } from "../store/manualModelTestModel";
@@ -13,9 +14,10 @@ interface ModelTestDialogProps {
   result: ModelTestResult | null;
   error: string;
   testing: boolean;
-  experimentalAvailable?: boolean;
+  originalOverdraftAvailable?: boolean;
+  adaptiveOverdraftAvailable?: boolean;
   onClose: () => void;
-  onTest: (model: string, experimentalWeeklyOverdraft?: boolean) => void;
+  onTest: (model: string, mode: OverdraftModelTestMode) => void;
 }
 
 const defaultOpenAIProbeModel = "gpt-5.6-sol";
@@ -67,7 +69,7 @@ const quotaWindowLabels: Record<NonNullable<ModelTestResult["quota_window"]>, UI
   five_hour_fallback: "ui.quota_window_five_hour_fallback",
 };
 
-export function ModelTestDialog({ account, result, error, testing, experimentalAvailable = false, onClose, onTest }: ModelTestDialogProps) {
+export function ModelTestDialog({ account, result, error, testing, originalOverdraftAvailable = false, adaptiveOverdraftAvailable = false, onClose, onTest }: ModelTestDialogProps) {
   const { locale, tx } = useI18n();
   const accountProvider = (account.provider || account.type || "").trim().toLowerCase();
   const provider = accountProvider === "codex-agent-identity" ? "codex" : accountProvider;
@@ -102,12 +104,12 @@ export function ModelTestDialog({ account, result, error, testing, experimentalA
   const identity = account.label || account.email || account.name || account.id;
   const normalizedModel = normalizeManualModelTestModel(model);
   const valid = normalizedModel.length > 0;
-  const submitTest = (experimentalWeeklyOverdraft: boolean) => {
+  const submitTest = (mode: OverdraftModelTestMode) => {
     if (!normalizedModel) return;
     const preference = recordManualModelTestModel(provider, normalizedModel);
     setModel(preference.model);
     setTestedModels(preference.testedModels);
-    onTest(preference.model, experimentalWeeklyOverdraft);
+    onTest(preference.model, mode);
   };
 
   return (
@@ -118,13 +120,19 @@ export function ModelTestDialog({ account, result, error, testing, experimentalA
         <>
           <span className="modal-scope">{tx("ui.single_account_minimal_upstream_usage")}</span>
           <button className="button" type="button" disabled={testing} onClick={onClose}>{tx("ui.close")}</button>
-          {experimentalAvailable && provider === "codex" ? (
-            <button className="button experimental-model-test-button" type="button" disabled={!valid || testing} onClick={() => submitTest(true)}>
+          {originalOverdraftAvailable && provider === "codex" ? (
+            <button className="button experimental-model-test-button" type="button" disabled={!valid || testing} onClick={() => submitTest("original")}>
               {testing ? <LoaderCircle className="spin" size={15} /> : <FlaskConical size={15} />}
-              {tx("ui.load_experimental_feature")}
+              {tx("ui.test_original_overdraft_mode")}
             </button>
           ) : null}
-          <button className="button button-primary" type="button" disabled={!valid || testing} onClick={() => submitTest(false)}>
+          {adaptiveOverdraftAvailable && provider === "codex" ? (
+            <button className="button experimental-model-test-button adaptive" type="button" disabled={!valid || testing} onClick={() => submitTest("adaptive")}>
+              {testing ? <LoaderCircle className="spin" size={15} /> : <FlaskConical size={15} />}
+              {tx("ui.test_adaptive_overdraft_mode")}
+            </button>
+          ) : null}
+          <button className="button button-primary" type="button" disabled={!valid || testing} onClick={() => submitTest("none")}>
             {testing ? <LoaderCircle className="spin" size={15} /> : <Activity size={15} />}
             {tx(testing ? "ui.testing" : result ? "ui.test_again" : "ui.start_test")}
           </button>
@@ -159,8 +167,11 @@ export function ModelTestDialog({ account, result, error, testing, experimentalA
           {suggestions.map((suggestion) => <option key={suggestion} value={suggestion} />)}
         </datalist>
 
-        {experimentalAvailable && provider === "codex" ? (
+        {originalOverdraftAvailable && provider === "codex" ? (
           <div className="model-test-experimental-note" role="note"><FlaskConical size={17} /><span>{tx("ui.experimental_model_test_description")}</span></div>
+        ) : null}
+        {adaptiveOverdraftAvailable && provider === "codex" ? (
+          <div className="model-test-experimental-note adaptive" role="note"><FlaskConical size={17} /><span>{tx("ui.adaptive_model_test_description")}</span></div>
         ) : null}
 
         {testing ? <div className="model-test-running" role="status"><LoaderCircle className="spin" size={20} /><div><strong>{tx("ui.connecting_to_model")}</strong><span>{normalizedModel}</span></div></div> : null}

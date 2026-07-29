@@ -33,8 +33,23 @@ export interface Account {
   updated_at?: string;
   last_refresh?: string;
   automation?: AccountAutomationSummary;
+  adaptive_weekly_overdraft?: AdaptiveWeeklyOverdraftSummary;
 	model_policy?: AccountModelPolicySummary;
 	concurrency?: AccountConcurrencySummary;
+}
+
+export type AdaptiveOverdraftPhase = "idle" | "armed" | "active_s1" | "active_s2" | "active_s4" | "exhausted" | "hard_stopped";
+export type AdaptiveOverdraftStrategy = "s1" | "s2" | "s4";
+
+export interface AdaptiveWeeklyOverdraftSummary {
+  phase: AdaptiveOverdraftPhase;
+  strategy?: AdaptiveOverdraftStrategy;
+  post_threshold_successes: number;
+  post_threshold_tokens: number;
+  last_success_at?: string;
+  last_failure_at?: string;
+  reset_at?: string;
+  hard_stop_reason?: string;
 }
 
 export interface AccountConcurrencyAvailability {
@@ -301,9 +316,10 @@ export interface ModelTestAttempt {
 }
 
 export interface ModelTestExperiment {
-  name: "weekly_overdraft";
+  name: "weekly_overdraft" | "adaptive_weekly_overdraft";
   applied: boolean;
   call_id?: string;
+  strategy?: AdaptiveOverdraftStrategy;
 }
 
 export interface ModelTestResponsePreview {
