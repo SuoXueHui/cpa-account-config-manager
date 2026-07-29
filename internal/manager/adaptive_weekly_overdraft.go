@@ -72,6 +72,8 @@ type AdaptiveWeeklyOverdraftExperiment struct {
 	dirty         bool
 	lastPersistAt time.Time
 	persistDelay  time.Duration
+	maxBodyBytes  int
+	newCallID     func(AdaptiveOverdraftStrategy) (string, bool)
 }
 
 func NewAdaptiveWeeklyOverdraftExperiment(enabled func() bool) *AdaptiveWeeklyOverdraftExperiment {
@@ -82,6 +84,7 @@ func NewAdaptiveWeeklyOverdraftExperiment(enabled func() bool) *AdaptiveWeeklyOv
 		enabled: enabled, now: time.Now, records: make(map[string]adaptiveOverdraftRecord),
 		requests: make(map[string]adaptiveOverdraftRequest), authIndex: make(map[string]string),
 		accountIDs: make(map[string]string), persistDelay: adaptiveOverdraftPersistDelay,
+		maxBodyBytes: defaultExperimentalRequestBodyLimit, newCallID: newAdaptiveExperimentalCallID,
 	}
 }
 
