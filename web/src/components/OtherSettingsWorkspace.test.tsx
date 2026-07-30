@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api/client";
 import { _resetSessionForTest, setSession } from "../store/session";
+import type { ExperimentalSettings } from "../types";
 import { OtherSettingsWorkspace } from "./OtherSettingsWorkspace";
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -190,7 +191,7 @@ describe("OtherSettingsWorkspace", () => {
     const workspace = await screen.findByRole("region", { name: "其他配置" });
     await user.click(within(workspace).getByRole("tab", { name: "实验性功能" }));
     const panel = within(workspace).getByRole("tabpanel", { name: "实验性功能" });
-    const original = within(panel).getByRole("checkbox", { name: "Codex 周额度透支续用" });
+    const original = within(panel).getByRole("checkbox", { name: "Codex 5h / 7d 额度透支续用" });
     const adaptive = within(panel).getByRole("checkbox", { name: "Codex 自适应最大透支" });
     expect(original).toBeChecked();
     expect(adaptive).not.toBeChecked();
