@@ -17,6 +17,9 @@ func TestAdaptiveWeeklyOverdraftStoreRoundTripExcludesSecretsAndUsesPrivatePermi
 	records := map[string]adaptiveOverdraftRecord{
 		fingerprint: {
 			Fingerprint: fingerprint, Phase: AdaptivePhaseActiveS2, Strategy: AdaptiveStrategyS2,
+			StrategyStats: map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats{
+				AdaptiveStrategyS2: {Attempts: 6, Successes: 5, Failures: 1},
+			},
 			PostThresholdSuccesses: 5, PostThresholdTokens: 42,
 			LastObservedAt: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
 		},
@@ -44,6 +47,9 @@ func TestAdaptiveWeeklyOverdraftStoreRoundTripExcludesSecretsAndUsesPrivatePermi
 	}
 	if got := loaded[fingerprint]; got.Phase != AdaptivePhaseActiveS2 || got.PostThresholdSuccesses != 5 || got.PostThresholdTokens != 42 {
 		t.Fatalf("loaded = %#v", got)
+	}
+	if stats := loaded[fingerprint].StrategyStats[AdaptiveStrategyS2]; stats.Attempts != 6 || stats.Successes != 5 || stats.Failures != 1 {
+		t.Fatalf("loaded strategy stats = %#v", loaded[fingerprint].StrategyStats)
 	}
 }
 

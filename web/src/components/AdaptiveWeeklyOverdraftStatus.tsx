@@ -1,4 +1,4 @@
-import type { AdaptiveWeeklyOverdraftSummary } from "../types";
+import type { AdaptiveOverdraftStrategy, AdaptiveWeeklyOverdraftSummary } from "../types";
 import { localeFormats, useI18n, type Locale } from "../i18n";
 
 interface AdaptiveWeeklyOverdraftStatusProps {
@@ -22,6 +22,7 @@ export function AdaptiveWeeklyOverdraftStatus({ summary }: AdaptiveWeeklyOverdra
     return (
       <div className="adaptive-overdraft-status is-stopped" role="status">
         <strong>{label}</strong><span>{tx("ui.adaptive_overdraft_no_further_probes")}</span>
+        {renderStrategyStats(summary, tx, formatNumber)}
       </div>
     );
   }
@@ -37,8 +38,27 @@ export function AdaptiveWeeklyOverdraftStatus({ summary }: AdaptiveWeeklyOverdra
       <strong>{label}</strong>
       <span>{tx("ui.adaptive_overdraft_success_count", { count: formatNumber(summary.post_threshold_successes) })}</span>
       <span>{tx("ui.adaptive_overdraft_token_count", { count: formatCompactNumber(summary.post_threshold_tokens, locale) })}</span>
+      {renderStrategyStats(summary, tx, formatNumber)}
     </div>
   );
+}
+
+function renderStrategyStats(
+  summary: AdaptiveWeeklyOverdraftSummary,
+  tx: (key: "ui.adaptive_overdraft_injection_stats", values?: Record<string, string | number>) => string,
+  formatNumber: (value: number) => string,
+) {
+  return (Object.entries(summary.strategy_stats ?? {}) as [AdaptiveOverdraftStrategy, NonNullable<AdaptiveWeeklyOverdraftSummary["strategy_stats"]>[AdaptiveOverdraftStrategy]][])
+    .filter((entry): entry is [AdaptiveOverdraftStrategy, NonNullable<typeof entry[1]>] => entry[1] !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([strategy, stats]) => (
+      <span key={strategy}>{tx("ui.adaptive_overdraft_injection_stats", {
+        strategy: strategy.toUpperCase(),
+        attempts: formatNumber(stats.attempts),
+        successes: formatNumber(stats.successes),
+        failures: formatNumber(stats.failures),
+      })}</span>
+    ));
 }
 
 function formatCompactNumber(value: number, locale: Locale): string {

@@ -4,19 +4,22 @@ WEB_DIR := $(CURDIR)/web
 GIT_RELEASE_TAG := $(shell git describe --tags --exact-match --match "v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null)
 VERSION ?= $(or $(patsubst v%,%,$(GIT_RELEASE_TAG)),0.0.0-dev)
 REPOSITORY ?=
+# The UI suite contains shared browser mocks; one worker keeps release checks deterministic.
+WEB_TEST_ARGS ?= --run --maxWorkers=1
 
 PLUGIN_LDFLAGS := -X cpa-account-config-manager/internal/manager.PluginVersion=$(VERSION)
 ifneq ($(strip $(REPOSITORY)),)
 PLUGIN_LDFLAGS += -X cpa-account-config-manager/internal/manager.PluginRepository=$(REPOSITORY)
 endif
 
-UNAME_S := $(shell uname -s)
-ifeq ($(OS),Windows_NT)
-PLUGIN_EXT := dll
-else ifeq ($(UNAME_S),Darwin)
-PLUGIN_EXT := dylib
+TARGET_GOOS ?= $(shell go env GOOS)
+TARGET_GOARCH ?= $(shell go env GOARCH)
+ifeq ($(TARGET_GOOS),windows)
+	PLUGIN_EXT := dll
+else ifeq ($(TARGET_GOOS),darwin)
+	PLUGIN_EXT := dylib
 else
-PLUGIN_EXT := so
+	PLUGIN_EXT := so
 endif
 
 .PHONY: build web plugin package test version-check verify clean
@@ -28,21 +31,21 @@ web:
 
 plugin: web
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=1 go build -buildvcs=false -ldflags "$(PLUGIN_LDFLAGS)" -buildmode=c-shared -o $(DIST_DIR)/$(PLUGIN_ID).$(PLUGIN_EXT) .
+	CGO_ENABLED=1 GOOS=$(TARGET_GOOS) GOARCH=$(TARGET_GOARCH) go build -buildvcs=false -ldflags "$(PLUGIN_LDFLAGS)" -buildmode=c-shared -o $(DIST_DIR)/$(PLUGIN_ID).$(PLUGIN_EXT) .
 	rm -f $(DIST_DIR)/$(PLUGIN_ID).h
 
 package: plugin
 	go run ./cmd/releasepack \
 		-id $(PLUGIN_ID) \
 		-version $(VERSION) \
-		-goos $$(go env GOOS) \
-		-goarch $$(go env GOARCH) \
+		-goos $(TARGET_GOOS) \
+		-goarch $(TARGET_GOARCH) \
 		-library $(DIST_DIR)/$(PLUGIN_ID).$(PLUGIN_EXT) \
 		-out $(DIST_DIR)/release
 
 test:
 	go test ./...
-	cd $(WEB_DIR) && npm test -- --run
+	cd $(WEB_DIR) && npm test -- $(WEB_TEST_ARGS)
 
 version-check:
 	printf '%s\n' '$(VERSION)' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$$'
@@ -55,7 +58,7 @@ verify: version-check
 	go test -race ./...
 	go vet ./...
 	cd $(WEB_DIR) && npm run typecheck
-	cd $(WEB_DIR) && npm test -- --run
+	cd $(WEB_DIR) && npm test -- $(WEB_TEST_ARGS)
 	$(MAKE) build
 
 clean:

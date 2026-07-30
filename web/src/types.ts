@@ -41,9 +41,16 @@ export interface Account {
 export type AdaptiveOverdraftPhase = "idle" | "armed" | "active_s1" | "active_s2" | "active_s4" | "exhausted" | "hard_stopped";
 export type AdaptiveOverdraftStrategy = "s1" | "s2" | "s4";
 
+export interface AdaptiveOverdraftStrategyStats {
+  attempts: number;
+  successes: number;
+  failures: number;
+}
+
 export interface AdaptiveWeeklyOverdraftSummary {
   phase: AdaptiveOverdraftPhase;
   strategy?: AdaptiveOverdraftStrategy;
+  strategy_stats?: Partial<Record<AdaptiveOverdraftStrategy, AdaptiveOverdraftStrategyStats>>;
   post_threshold_successes: number;
   post_threshold_tokens: number;
   last_success_at?: string;

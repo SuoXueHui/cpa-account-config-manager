@@ -24,6 +24,14 @@ const (
 type AdaptiveOverdraftPhase string
 type AdaptiveOverdraftStrategy string
 
+// AdaptiveOverdraftStrategyStats records sanitized lifecycle outcomes for
+// requests that actually received an adaptive tool injection.
+type AdaptiveOverdraftStrategyStats struct {
+	Attempts  int64 `json:"attempts"`
+	Successes int64 `json:"successes"`
+	Failures  int64 `json:"failures"`
+}
+
 const (
 	AdaptivePhaseIdle        AdaptiveOverdraftPhase = "idle"
 	AdaptivePhaseArmed       AdaptiveOverdraftPhase = "armed"
@@ -39,41 +47,44 @@ const (
 )
 
 type adaptiveOverdraftRecord struct {
-	Fingerprint              string                    `json:"fingerprint"`
-	Phase                    AdaptiveOverdraftPhase    `json:"phase"`
-	Strategy                 AdaptiveOverdraftStrategy `json:"strategy,omitempty"`
-	PostThresholdSuccesses   int64                     `json:"post_threshold_successes"`
-	PostThresholdTokens      int64                     `json:"post_threshold_tokens"`
-	ConsecutiveQuotaFailures int                       `json:"consecutive_quota_failures"`
-	LastSuccessAt            time.Time                 `json:"last_success_at,omitempty"`
-	LastFailureAt            time.Time                 `json:"last_failure_at,omitempty"`
-	LastObservedAt           time.Time                 `json:"last_observed_at,omitempty"`
-	QuotaObservedAt          time.Time                 `json:"quota_observed_at,omitempty"`
-	ResetAt                  time.Time                 `json:"reset_at,omitempty"`
-	HardStopReason           string                    `json:"hard_stop_reason,omitempty"`
+	Fingerprint              string                                                       `json:"fingerprint"`
+	Phase                    AdaptiveOverdraftPhase                                       `json:"phase"`
+	Strategy                 AdaptiveOverdraftStrategy                                    `json:"strategy,omitempty"`
+	StrategyStats            map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats `json:"strategy_stats,omitempty"`
+	PostThresholdSuccesses   int64                                                        `json:"post_threshold_successes"`
+	PostThresholdTokens      int64                                                        `json:"post_threshold_tokens"`
+	ConsecutiveQuotaFailures int                                                          `json:"consecutive_quota_failures"`
+	LastSuccessAt            time.Time                                                    `json:"last_success_at,omitempty"`
+	LastFailureAt            time.Time                                                    `json:"last_failure_at,omitempty"`
+	LastObservedAt           time.Time                                                    `json:"last_observed_at,omitempty"`
+	QuotaObservedAt          time.Time                                                    `json:"quota_observed_at,omitempty"`
+	ResetAt                  time.Time                                                    `json:"reset_at,omitempty"`
+	HardStopReason           string                                                       `json:"hard_stop_reason,omitempty"`
 }
 
 type AdaptiveWeeklyOverdraftSummary struct {
-	Phase                  AdaptiveOverdraftPhase    `json:"phase"`
-	Strategy               AdaptiveOverdraftStrategy `json:"strategy,omitempty"`
-	PostThresholdSuccesses int64                     `json:"post_threshold_successes"`
-	PostThresholdTokens    int64                     `json:"post_threshold_tokens"`
-	LastSuccessAt          *time.Time                `json:"last_success_at,omitempty"`
-	LastFailureAt          *time.Time                `json:"last_failure_at,omitempty"`
-	ResetAt                *time.Time                `json:"reset_at,omitempty"`
-	HardStopReason         string                    `json:"hard_stop_reason,omitempty"`
+	Phase                  AdaptiveOverdraftPhase                                       `json:"phase"`
+	Strategy               AdaptiveOverdraftStrategy                                    `json:"strategy,omitempty"`
+	StrategyStats          map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats `json:"strategy_stats,omitempty"`
+	PostThresholdSuccesses int64                                                        `json:"post_threshold_successes"`
+	PostThresholdTokens    int64                                                        `json:"post_threshold_tokens"`
+	LastSuccessAt          *time.Time                                                   `json:"last_success_at,omitempty"`
+	LastFailureAt          *time.Time                                                   `json:"last_failure_at,omitempty"`
+	ResetAt                *time.Time                                                   `json:"reset_at,omitempty"`
+	HardStopReason         string                                                       `json:"hard_stop_reason,omitempty"`
 }
 
 type AdaptiveWeeklyOverdraftAccountState struct {
-	AccountID              string                    `json:"account_id"`
-	Phase                  AdaptiveOverdraftPhase    `json:"phase"`
-	Strategy               AdaptiveOverdraftStrategy `json:"strategy,omitempty"`
-	PostThresholdSuccesses int64                     `json:"post_threshold_successes"`
-	PostThresholdTokens    int64                     `json:"post_threshold_tokens"`
-	LastSuccessAt          *time.Time                `json:"last_success_at,omitempty"`
-	LastFailureAt          *time.Time                `json:"last_failure_at,omitempty"`
-	ResetAt                *time.Time                `json:"reset_at,omitempty"`
-	HardStopReason         string                    `json:"hard_stop_reason,omitempty"`
+	AccountID              string                                                       `json:"account_id"`
+	Phase                  AdaptiveOverdraftPhase                                       `json:"phase"`
+	Strategy               AdaptiveOverdraftStrategy                                    `json:"strategy,omitempty"`
+	StrategyStats          map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats `json:"strategy_stats,omitempty"`
+	PostThresholdSuccesses int64                                                        `json:"post_threshold_successes"`
+	PostThresholdTokens    int64                                                        `json:"post_threshold_tokens"`
+	LastSuccessAt          *time.Time                                                   `json:"last_success_at,omitempty"`
+	LastFailureAt          *time.Time                                                   `json:"last_failure_at,omitempty"`
+	ResetAt                *time.Time                                                   `json:"reset_at,omitempty"`
+	HardStopReason         string                                                       `json:"hard_stop_reason,omitempty"`
 }
 
 type AdaptiveWeeklyOverdraftManagementSnapshot struct {
@@ -288,13 +299,16 @@ func (e *AdaptiveWeeklyOverdraftExperiment) ObserveCompletion(completion cpaapi.
 		return
 	}
 	changed := false
+	stats := state.StrategyStats[request.Strategy]
 	if adaptiveCompletionSucceeded(completion) {
+		stats.Successes = saturatingAdd(stats.Successes, 1)
 		if state.Phase != AdaptivePhaseHardStopped && state.Phase != AdaptivePhaseExhausted && state.Strategy == request.Strategy {
 			state.Phase = adaptiveActivePhase(request.Strategy)
 			state.LastSuccessAt = now
 			changed = true
 		}
 	} else {
+		stats.Failures = saturatingAdd(stats.Failures, 1)
 		usage := cpaapi.UsageRecord{Provider: "codex", Failed: true, Failure: cpaapi.UsageFailure{StatusCode: completion.StatusCode, Body: completion.Error}}
 		evidence := classifyUsageFailure(usage, now)
 		switch adaptiveFailureClass(completion.StatusCode, evidence) {
@@ -312,6 +326,11 @@ func (e *AdaptiveWeeklyOverdraftExperiment) ObserveCompletion(completion cpaapi.
 			}
 		}
 	}
+	if state.StrategyStats == nil {
+		state.StrategyStats = make(map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats)
+	}
+	state.StrategyStats[request.Strategy] = stats
+	changed = true
 	if changed {
 		state.LastObservedAt = now
 		e.records[request.Fingerprint] = state
@@ -339,11 +358,22 @@ func (e *AdaptiveWeeklyOverdraftExperiment) recordRequest(requestID, authID stri
 		e.ensureRecordCapacityLocked(recordedAt)
 		e.records[fingerprint] = adaptiveOverdraftRecord{Fingerprint: fingerprint, Phase: AdaptivePhaseIdle}
 	}
+	record := e.records[fingerprint]
+	if record.StrategyStats == nil {
+		record.StrategyStats = make(map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats)
+	}
+	stats := record.StrategyStats[strategy]
+	stats.Attempts = saturatingAdd(stats.Attempts, 1)
+	record.StrategyStats[strategy] = stats
+	record.LastObservedAt = recordedAt
+	e.records[fingerprint] = record
+	e.dirty = true
 	if len(e.requests) >= maxAdaptiveOverdraftRequests {
 		e.evictOldestRequestLocked()
 	}
 	e.requests[requestID] = adaptiveOverdraftRequest{Fingerprint: fingerprint, Strategy: strategy, RecordedAt: recordedAt}
 	e.mu.Unlock()
+	e.persist(false)
 }
 
 func (e *AdaptiveWeeklyOverdraftExperiment) stateForAuthID(authID string) (adaptiveOverdraftRecord, bool) {
@@ -353,17 +383,38 @@ func (e *AdaptiveWeeklyOverdraftExperiment) stateForAuthID(authID string) (adapt
 	fingerprint := adaptiveAuthFingerprint(authID)
 	e.mu.RLock()
 	record, exists := e.records[fingerprint]
+	if exists {
+		record.StrategyStats = cloneAdaptiveStrategyStats(record.StrategyStats)
+	}
 	e.mu.RUnlock()
 	return record, exists
 }
 
+func cloneAdaptiveStrategyStats(source map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats) map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats, len(source))
+	for strategy, stats := range source {
+		if !validAdaptiveStrategy(strategy) || strategy == "" {
+			continue
+		}
+		clone[strategy] = stats
+	}
+	if len(clone) == 0 {
+		return nil
+	}
+	return clone
+}
+
 func (e *AdaptiveWeeklyOverdraftExperiment) SummaryForAuthID(authID string) *AdaptiveWeeklyOverdraftSummary {
 	record, exists := e.stateForAuthID(authID)
-	if !exists || record.Phase == AdaptivePhaseIdle && record.PostThresholdSuccesses == 0 && record.PostThresholdTokens == 0 {
+	if !exists || record.Phase == AdaptivePhaseIdle && record.PostThresholdSuccesses == 0 && record.PostThresholdTokens == 0 && len(record.StrategyStats) == 0 {
 		return nil
 	}
 	return &AdaptiveWeeklyOverdraftSummary{
 		Phase: record.Phase, Strategy: record.Strategy,
+		StrategyStats:          cloneAdaptiveStrategyStats(record.StrategyStats),
 		PostThresholdSuccesses: record.PostThresholdSuccesses, PostThresholdTokens: record.PostThresholdTokens,
 		LastSuccessAt: adaptiveTimePointer(record.LastSuccessAt), LastFailureAt: adaptiveTimePointer(record.LastFailureAt),
 		ResetAt: adaptiveTimePointer(record.ResetAt), HardStopReason: sanitizeAdaptiveHardStopReason(record.HardStopReason),
@@ -399,6 +450,7 @@ func (e *AdaptiveWeeklyOverdraftExperiment) ManagementSnapshot() AdaptiveWeeklyO
 		}
 		snapshot.Accounts = append(snapshot.Accounts, AdaptiveWeeklyOverdraftAccountState{
 			AccountID: accountID, Phase: record.Phase, Strategy: record.Strategy,
+			StrategyStats:          cloneAdaptiveStrategyStats(record.StrategyStats),
 			PostThresholdSuccesses: record.PostThresholdSuccesses, PostThresholdTokens: record.PostThresholdTokens,
 			LastSuccessAt: adaptiveTimePointer(record.LastSuccessAt), LastFailureAt: adaptiveTimePointer(record.LastFailureAt),
 			ResetAt: adaptiveTimePointer(record.ResetAt), HardStopReason: sanitizeAdaptiveHardStopReason(record.HardStopReason),
@@ -687,14 +739,33 @@ func applyAdaptiveQuotaObservation(record *adaptiveOverdraftRecord, usage *Accou
 		if usage.Codex.SevenDay.ResetAt != nil {
 			record.ResetAt = usage.Codex.SevenDay.ResetAt.UTC()
 		}
-		return before != *record
+		return !adaptiveOverdraftRecordEqual(before, *record)
 	}
 	if record.Phase == AdaptivePhaseIdle || record.Phase == AdaptivePhaseHardStopped {
 		record.Phase = AdaptivePhaseArmed
 		record.Strategy = AdaptiveStrategyS1
 		record.HardStopReason = ""
 	}
-	return before != *record
+	return !adaptiveOverdraftRecordEqual(before, *record)
+}
+
+func adaptiveOverdraftRecordEqual(left, right adaptiveOverdraftRecord) bool {
+	if left.Fingerprint != right.Fingerprint || left.Phase != right.Phase || left.Strategy != right.Strategy ||
+		left.PostThresholdSuccesses != right.PostThresholdSuccesses || left.PostThresholdTokens != right.PostThresholdTokens ||
+		left.ConsecutiveQuotaFailures != right.ConsecutiveQuotaFailures || left.LastSuccessAt != right.LastSuccessAt ||
+		left.LastFailureAt != right.LastFailureAt || left.LastObservedAt != right.LastObservedAt ||
+		left.QuotaObservedAt != right.QuotaObservedAt || left.ResetAt != right.ResetAt || left.HardStopReason != right.HardStopReason {
+		return false
+	}
+	if len(left.StrategyStats) != len(right.StrategyStats) {
+		return false
+	}
+	for strategy, stats := range left.StrategyStats {
+		if other, ok := right.StrategyStats[strategy]; !ok || other != stats {
+			return false
+		}
+	}
+	return true
 }
 
 func adaptiveRecordCountsPostThresholdSuccess(record adaptiveOverdraftRecord, now time.Time) bool {
