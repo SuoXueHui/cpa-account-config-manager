@@ -310,6 +310,6 @@ describe("AccountUsageCell", () => {
       },
     }} />);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Adaptive S2成功 88192 tok");
+    expect(screen.getByRole("status")).toHaveTextContent("Adaptive S2观测窗口成功 88192 tok");
   });
 });

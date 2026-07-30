@@ -92,6 +92,7 @@ func sanitizeAdaptiveOverdraftRecord(record adaptiveOverdraftRecord, now time.Ti
 	record.PostThresholdSuccesses = maxInt64(0, record.PostThresholdSuccesses)
 	record.PostThresholdTokens = maxInt64(0, record.PostThresholdTokens)
 	record.ConsecutiveQuotaFailures = min(max(record.ConsecutiveQuotaFailures, 0), 1_000_000)
+	record.StrategyStats = sanitizeAdaptiveStrategyStats(record.StrategyStats)
 	record.HardStopReason = sanitizeAdaptiveHardStopReason(record.HardStopReason)
 	if record.Phase != AdaptivePhaseHardStopped {
 		record.HardStopReason = ""
@@ -101,6 +102,27 @@ func sanitizeAdaptiveOverdraftRecord(record adaptiveOverdraftRecord, now time.Ti
 		return adaptiveOverdraftRecord{}, false
 	}
 	return record, true
+}
+
+func sanitizeAdaptiveStrategyStats(source map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats) map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats {
+	if len(source) == 0 {
+		return nil
+	}
+	sanitized := make(map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats, len(source))
+	for strategy, stats := range source {
+		if !validAdaptiveStrategy(strategy) || strategy == "" {
+			continue
+		}
+		sanitized[strategy] = AdaptiveOverdraftStrategyStats{
+			Attempts:  maxInt64(0, stats.Attempts),
+			Successes: maxInt64(0, stats.Successes),
+			Failures:  maxInt64(0, stats.Failures),
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
 }
 
 func adaptiveOverdraftRecordActivity(record adaptiveOverdraftRecord) time.Time {

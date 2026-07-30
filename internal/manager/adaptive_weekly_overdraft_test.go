@@ -100,6 +100,9 @@ func TestAdaptiveWeeklyOverdraftManagementReturnsSanitizedAccountState(t *testin
 	record := app.adaptiveOverdraft.records[adaptiveAuthFingerprint("secret-stable-auth")]
 	record.Phase = AdaptivePhaseActiveS2
 	record.Strategy = AdaptiveStrategyS2
+	record.StrategyStats = map[AdaptiveOverdraftStrategy]AdaptiveOverdraftStrategyStats{
+		AdaptiveStrategyS2: {Attempts: 4, Successes: 3, Failures: 1},
+	}
 	record.PostThresholdSuccesses = 183
 	record.PostThresholdTokens = 14_800_000
 	app.adaptiveOverdraft.records[record.Fingerprint] = record
@@ -122,6 +125,9 @@ func TestAdaptiveWeeklyOverdraftManagementReturnsSanitizedAccountState(t *testin
 	account := snapshot.Accounts[0]
 	if account.AccountID != "account-1" || account.Phase != AdaptivePhaseActiveS2 || account.Strategy != AdaptiveStrategyS2 || account.PostThresholdSuccesses != 183 || account.PostThresholdTokens != 14_800_000 {
 		t.Fatalf("account = %#v", account)
+	}
+	if stats := account.StrategyStats[AdaptiveStrategyS2]; stats.Attempts != 4 || stats.Successes != 3 || stats.Failures != 1 {
+		t.Fatalf("strategy stats = %#v", account.StrategyStats)
 	}
 	serialized := string(response.Body)
 	if strings.Contains(serialized, "secret-stable-auth") || strings.Contains(serialized, adaptiveAuthFingerprint("secret-stable-auth")) || strings.Contains(serialized, "RequestID") {
@@ -321,6 +327,27 @@ func TestAdaptiveWeeklyOverdraftStateSuccessAndUsageCounters(t *testing.T) {
 	state, ok := engine.stateForAuthID("stable-auth-1")
 	if !ok || state.Phase != AdaptivePhaseActiveS1 || state.PostThresholdSuccesses != 1 || state.PostThresholdTokens != 42 {
 		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftTracksInjectedStrategyOutcome(t *testing.T) {
+	now := time.Date(2026, 7, 29, 1, 30, 0, 0, time.UTC)
+	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return true })
+	engine.now = func() time.Time { return now }
+	engine.ObserveAccounts([]Account{adaptiveTestAccount("account-1", "stable-auth-1", 100, now)})
+
+	engine.recordRequest("success", "stable-auth-1", AdaptiveStrategyS1, now)
+	engine.ObserveCompletion(cpaapi.RequestCompletion{RequestID: "success", StatusCode: http.StatusOK, CompletedAt: now})
+	engine.recordRequest("failure", "stable-auth-1", AdaptiveStrategyS1, now)
+	engine.ObserveCompletion(cpaapi.RequestCompletion{RequestID: "failure", StatusCode: http.StatusTooManyRequests, CompletedAt: now})
+
+	state, ok := engine.stateForAuthID("stable-auth-1")
+	if !ok {
+		t.Fatal("state not found")
+	}
+	stats := state.StrategyStats[AdaptiveStrategyS1]
+	if stats.Attempts != 2 || stats.Successes != 1 || stats.Failures != 1 {
+		t.Fatalf("strategy stats = %#v", stats)
 	}
 }
 
