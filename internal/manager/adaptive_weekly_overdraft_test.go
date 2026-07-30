@@ -176,7 +176,7 @@ func TestAdaptiveAutomaticDisableProbeUsesFallbackWithoutConsumingStrategy(t *te
 			probe.StatusCode = http.StatusOK
 		}
 		return probe, nil
-	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+	}, false, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
 		Name: "adaptive_weekly_overdraft", AttemptLimit: 6, Models: []string{"preferred", "fallback"},
 		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
 		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
@@ -199,7 +199,7 @@ func TestAdaptiveAutomaticDisableProbeStopsOnHardFailure(t *testing.T) {
 			StatusCode: http.StatusUnauthorized, TestedAt: now,
 			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
 		}, nil
-	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+	}, false, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
 		Name: "adaptive_weekly_overdraft", AttemptLimit: 9, Models: []string{"preferred", "fallback", "compatibility"},
 		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
 		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
@@ -219,7 +219,7 @@ func TestAdaptiveAutomaticDisableProbeLeavesTransientFailureInconclusive(t *test
 			StatusCode: http.StatusTooManyRequests, TestedAt: now,
 			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
 		}, nil
-	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+	}, false, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
 		Name: "adaptive_weekly_overdraft", AttemptLimit: 9, Models: []string{"preferred"},
 		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
 		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
@@ -239,7 +239,7 @@ func TestAdaptiveAutomaticDisableProbeAllStrategiesFailDefinitively(t *testing.T
 			StatusCode: http.StatusTooManyRequests, QuotaWindow: InspectionQuotaWindowSevenDay, TestedAt: now,
 			Experiment: &ModelTestExperiment{Name: "adaptive_weekly_overdraft", Applied: true, Strategy: request.AdaptiveWeeklyOverdraftStrategy},
 		}, nil
-	}, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
+	}, false, Account{ID: "account-1"}, InspectionResult{}, AutomaticDisableProbePlan{
 		Name: "adaptive_weekly_overdraft", AttemptLimit: 9, Models: []string{"preferred", "fallback", "compatibility"},
 		Strategies: []AdaptiveOverdraftStrategy{AdaptiveStrategyS1, AdaptiveStrategyS2, AdaptiveStrategyS4},
 		Request:    ModelTestRequest{ExperimentalAdaptiveWeeklyOverdraft: true, Inspection: true},
