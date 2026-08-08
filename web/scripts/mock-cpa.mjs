@@ -320,6 +320,8 @@ const accounts = Array.from({ length: 36 }, (_, index) => {
       post_threshold_tokens: 128_000 + index * 1_000,
       last_success_at: new Date(Date.now() - 3 * 60_000).toISOString(),
     } } : {}),
+		created_at: new Date(Date.now() - (45 + index) * 24 * 60 * 60_000).toISOString(),
+		...(disabled ? { disabled_at: new Date(Date.now() - (index + 1) * 37 * 60_000).toISOString() } : {}),
     updated_at: new Date(Date.now() - index * 43 * 60_000).toISOString(),
   };
 });

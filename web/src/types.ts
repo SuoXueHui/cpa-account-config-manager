@@ -30,6 +30,8 @@ export interface Account {
   recent_requests?: RecentRequestEntry[];
   next_retry_after?: string;
   usage?: AccountUsageSnapshot;
+  created_at?: string;
+  disabled_at?: string;
   updated_at?: string;
   last_refresh?: string;
   automation?: AccountAutomationSummary;
@@ -220,6 +222,14 @@ export interface AccountFilters {
   editability?: string;
   source?: string;
   search?: string;
+}
+
+export type AccountSortField = "account" | "provider" | "type" | "usage" | "active_reset_count" | "concurrency" | "created_at" | "disabled_at" | "access" | "status" | "priority" | "routing";
+export type AccountSortOrder = "asc" | "desc";
+
+export interface AccountSort {
+  field: AccountSortField;
+  order: AccountSortOrder;
 }
 
 export interface AccountListResponse {
