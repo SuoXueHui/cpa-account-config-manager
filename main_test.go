@@ -190,9 +190,10 @@ func TestHandleMethodNegotiatesLifecycleCapabilityWithHostSchema(t *testing.T) {
 	for _, test := range []struct {
 		schema        uint32
 		wantLifecycle bool
+		wantScheduler bool
 	}{
-		{schema: cpaapi.LegacySchemaVersion, wantLifecycle: false},
-		{schema: cpaapi.SchemaVersion, wantLifecycle: true},
+		{schema: cpaapi.LegacySchemaVersion, wantLifecycle: false, wantScheduler: false},
+		{schema: cpaapi.SchemaVersion, wantLifecycle: true, wantScheduler: true},
 	} {
 		rawRequest, errMarshal := json.Marshal(lifecycleRequest{ConfigYAML: []byte("data_dir: " + t.TempDir()), SchemaVersion: test.schema})
 		if errMarshal != nil {
@@ -210,9 +211,40 @@ func TestHandleMethodNegotiatesLifecycleCapabilityWithHostSchema(t *testing.T) {
 		if errUnmarshal := json.Unmarshal(result, &registration); errUnmarshal != nil {
 			t.Fatalf("Unmarshal(schema %d) error = %v", test.schema, errUnmarshal)
 		}
-		if registration.SchemaVersion != test.schema || registration.Capabilities.RequestLifecyclePlugin != test.wantLifecycle {
+		if registration.SchemaVersion != test.schema || registration.Capabilities.RequestLifecyclePlugin != test.wantLifecycle || registration.Capabilities.Scheduler != test.wantScheduler {
 			t.Fatalf("registration for schema %d = %#v", test.schema, registration)
 		}
+	}
+}
+
+func TestHandleMethodDispatchesSchedulerPick(t *testing.T) {
+	originalApp := pluginApp
+	testApp := manager.NewApp(nil, nil)
+	testApp.ConfigureHost([]byte("data_dir: "+t.TempDir()+"\nexperimental_settings:\n  adaptive_weekly_overdraft_enabled: true\n  adaptive_token_drain_enabled: true\n  adaptive_token_drain_percent: 100\n"), cpaapi.SchemaVersion)
+	pluginApp = testApp
+	defer func() {
+		testApp.Close()
+		pluginApp = originalApp
+	}()
+
+	rawRequest, errMarshal := json.Marshal(cpaapi.SchedulerPickRequest{Provider: "openai"})
+	if errMarshal != nil {
+		t.Fatalf("Marshal() error = %v", errMarshal)
+	}
+	raw, errHandle := handleMethod(cpaapi.MethodSchedulerPick, rawRequest)
+	if errHandle != nil {
+		t.Fatalf("handleMethod() error = %v", errHandle)
+	}
+	result, errDecode := decodeEnvelopeResult(raw)
+	if errDecode != nil {
+		t.Fatalf("decode result: %v", errDecode)
+	}
+	var response cpaapi.SchedulerPickResponse
+	if errUnmarshal := json.Unmarshal(result, &response); errUnmarshal != nil {
+		t.Fatalf("Unmarshal() error = %v", errUnmarshal)
+	}
+	if response.Handled {
+		t.Fatalf("non-Codex response = %#v", response)
 	}
 }
 

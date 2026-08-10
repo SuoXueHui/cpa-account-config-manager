@@ -93,6 +93,7 @@ func sanitizeAdaptiveOverdraftRecord(record adaptiveOverdraftRecord, now time.Ti
 	record.PostThresholdTokens = maxInt64(0, record.PostThresholdTokens)
 	record.ConsecutiveQuotaFailures = min(max(record.ConsecutiveQuotaFailures, 0), 1_000_000)
 	record.StrategyStats = sanitizeAdaptiveStrategyStats(record.StrategyStats)
+	record.RequestShapeStats = sanitizeAdaptiveRequestShapeStats(record.RequestShapeStats)
 	record.HardStopReason = sanitizeAdaptiveHardStopReason(record.HardStopReason)
 	if record.Phase != AdaptivePhaseHardStopped {
 		record.HardStopReason = ""
@@ -114,9 +115,30 @@ func sanitizeAdaptiveStrategyStats(source map[AdaptiveOverdraftStrategy]Adaptive
 			continue
 		}
 		sanitized[strategy] = AdaptiveOverdraftStrategyStats{
-			Attempts:  maxInt64(0, stats.Attempts),
-			Successes: maxInt64(0, stats.Successes),
-			Failures:  maxInt64(0, stats.Failures),
+			Attempts:               maxInt64(0, stats.Attempts),
+			Successes:              maxInt64(0, stats.Successes),
+			Failures:               maxInt64(0, stats.Failures),
+			PostThresholdSuccesses: maxInt64(0, stats.PostThresholdSuccesses),
+			PostThresholdTokens:    maxInt64(0, stats.PostThresholdTokens),
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
+func sanitizeAdaptiveRequestShapeStats(source map[AdaptiveRequestShape]AdaptiveRequestShapeStats) map[AdaptiveRequestShape]AdaptiveRequestShapeStats {
+	if len(source) == 0 {
+		return nil
+	}
+	sanitized := make(map[AdaptiveRequestShape]AdaptiveRequestShapeStats, len(source))
+	for shape, stats := range source {
+		if !validAdaptiveRequestShape(shape) {
+			continue
+		}
+		sanitized[shape] = AdaptiveRequestShapeStats{
+			Attempts: maxInt64(0, stats.Attempts), Successes: maxInt64(0, stats.Successes), Failures: maxInt64(0, stats.Failures),
 		}
 	}
 	if len(sanitized) == 0 {

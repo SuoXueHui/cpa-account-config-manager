@@ -43,6 +43,7 @@ type RegistrationCapabilities struct {
 	UsagePlugin            bool     `json:"usage_plugin"`
 	RequestInterceptor     bool     `json:"request_interceptor"`
 	RequestLifecyclePlugin bool     `json:"request_lifecycle_plugin"`
+	Scheduler              bool     `json:"scheduler"`
 	AuthProvider           bool     `json:"auth_provider"`
 	ModelProvider          bool     `json:"model_provider"`
 	Executor               bool     `json:"executor"`
@@ -111,6 +112,8 @@ func NewApp(host AuthHost, indexHTML []byte) *App {
 	imports.SetAgentIdentityExperiment(agentIdentity)
 	weeklyOverdraft := NewWeeklyOverdraftExperiment(experiments.WeeklyOverdraftEnabled)
 	adaptiveOverdraft := NewAdaptiveWeeklyOverdraftExperiment(experiments.AdaptiveWeeklyOverdraftEnabled)
+	adaptiveOverdraft.SetToolOutputCanary(experiments.AdaptiveToolOutputEnabled, experiments.AdaptiveToolOutputPercent)
+	adaptiveOverdraft.SetTokenDrainCanary(experiments.AdaptiveTokenDrainEnabled, experiments.AdaptiveTokenDrainPercent, experiments.AdaptiveTokenDrainMaxSessions)
 	requestHooks := NewRequestHook(concurrency, weeklyOverdraft, adaptiveOverdraft)
 	runtimeMarker := ""
 	if provider, ok := host.(interface{ RuntimeProcessMarker() string }); ok {
@@ -289,12 +292,20 @@ func (a *App) Registration() Registration {
 		},
 		Capabilities: RegistrationCapabilities{
 			ManagementAPI: true, UsagePlugin: true, RequestInterceptor: true, RequestLifecyclePlugin: requestLifecycle,
+			Scheduler:    requestLifecycle,
 			AuthProvider: true, ModelProvider: true, Executor: true,
 			ExecutorModelScope:    "oauth",
 			ExecutorInputFormats:  []string{"codex"},
 			ExecutorOutputFormats: []string{"codex"},
 		},
 	}
+}
+
+func (a *App) HandleSchedulerPick(request cpaapi.SchedulerPickRequest) cpaapi.SchedulerPickResponse {
+	if a == nil || a.adaptiveOverdraft == nil {
+		return cpaapi.SchedulerPickResponse{}
+	}
+	return a.adaptiveOverdraft.PickTokenDrainAuth(request)
 }
 
 func (a *App) HandleRequestBefore(request cpaapi.RequestInterceptRequest) cpaapi.RequestInterceptResponse {

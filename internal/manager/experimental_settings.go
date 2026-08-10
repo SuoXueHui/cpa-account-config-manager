@@ -14,9 +14,20 @@ import (
 type ExperimentalSettings struct {
 	WeeklyOverdraftEnabled         bool `json:"weekly_overdraft_enabled" yaml:"weekly_overdraft_enabled"`
 	AdaptiveWeeklyOverdraftEnabled bool `json:"adaptive_weekly_overdraft_enabled" yaml:"adaptive_weekly_overdraft_enabled"`
+	AdaptiveTokenDrainEnabled      bool `json:"adaptive_token_drain_enabled" yaml:"adaptive_token_drain_enabled"`
+	AdaptiveTokenDrainPercent      int  `json:"adaptive_token_drain_percent" yaml:"adaptive_token_drain_percent"`
+	AdaptiveTokenDrainMaxSessions  int  `json:"adaptive_token_drain_max_sessions" yaml:"adaptive_token_drain_max_sessions"`
+	AdaptiveToolOutputEnabled      bool `json:"adaptive_tool_output_enabled" yaml:"adaptive_tool_output_enabled"`
+	AdaptiveToolOutputPercent      int  `json:"adaptive_tool_output_percent" yaml:"adaptive_tool_output_percent"`
 	AgentIdentityEnabled           bool `json:"agent_identity_enabled" yaml:"agent_identity_enabled"`
 	AutoModelWhitelistEnabled      bool `json:"auto_model_whitelist_enabled" yaml:"auto_model_whitelist_enabled"`
 }
+
+const (
+	defaultAdaptiveTokenDrainPercent     = 20
+	defaultAdaptiveTokenDrainMaxSessions = 8
+	defaultAdaptiveToolOutputPercent     = 10
+)
 
 var (
 	ErrOverdraftModesMutuallyExclusive    = errors.New("weekly overdraft modes are mutually exclusive")
@@ -39,7 +50,21 @@ func (s *ExperimentalSettingsService) AutoModelWhitelistEnabled() bool {
 
 func normalizeExperimentalSettings(settings ExperimentalSettings) ExperimentalSettings {
 	settings.AutoModelWhitelistEnabled = true
+	settings.AdaptiveTokenDrainPercent = normalizeExperimentalPercent(settings.AdaptiveTokenDrainPercent, defaultAdaptiveTokenDrainPercent)
+	settings.AdaptiveTokenDrainMaxSessions = normalizeExperimentalBoundedInt(settings.AdaptiveTokenDrainMaxSessions, defaultAdaptiveTokenDrainMaxSessions, 1, 64)
+	settings.AdaptiveToolOutputPercent = normalizeExperimentalPercent(settings.AdaptiveToolOutputPercent, defaultAdaptiveToolOutputPercent)
 	return settings
+}
+
+func normalizeExperimentalPercent(value, fallback int) int {
+	return normalizeExperimentalBoundedInt(value, fallback, 1, 100)
+}
+
+func normalizeExperimentalBoundedInt(value, fallback, minimum, maximum int) int {
+	if value == 0 {
+		return fallback
+	}
+	return min(max(value, minimum), maximum)
 }
 
 type ExperimentalSettingsSnapshot struct {
@@ -61,6 +86,11 @@ type ExperimentalSettingsService struct {
 	hostSchema             uint32
 	weeklyOverdraftEnabled atomic.Bool
 	adaptiveEnabled        atomic.Bool
+	adaptiveDrainEnabled   atomic.Bool
+	adaptiveDrainPercent   atomic.Int64
+	adaptiveDrainSessions  atomic.Int64
+	adaptiveToolEnabled    atomic.Bool
+	adaptiveToolPercent    atomic.Int64
 }
 
 func NewExperimentalSettingsService() *ExperimentalSettingsService {
@@ -125,6 +155,7 @@ func (s *ExperimentalSettingsService) ConfigureHost(config Config, hostSchema ui
 	s.mu.Unlock()
 	s.weeklyOverdraftEnabled.Store(settings.WeeklyOverdraftEnabled)
 	s.adaptiveEnabled.Store(settings.AdaptiveWeeklyOverdraftEnabled)
+	s.storeTokenFirstSettings(settings)
 }
 
 func (s *ExperimentalSettingsService) Snapshot() ExperimentalSettingsSnapshot {
@@ -157,6 +188,35 @@ func (s *ExperimentalSettingsService) AdaptiveWeeklyOverdraftEnabled() bool {
 		return false
 	}
 	return s.adaptiveEnabled.Load()
+}
+
+func (s *ExperimentalSettingsService) AdaptiveTokenDrainEnabled() bool {
+	return s != nil && s.adaptiveEnabled.Load() && s.adaptiveDrainEnabled.Load()
+}
+
+func (s *ExperimentalSettingsService) AdaptiveTokenDrainPercent() int {
+	if s == nil {
+		return defaultAdaptiveTokenDrainPercent
+	}
+	return int(s.adaptiveDrainPercent.Load())
+}
+
+func (s *ExperimentalSettingsService) AdaptiveTokenDrainMaxSessions() int {
+	if s == nil {
+		return defaultAdaptiveTokenDrainMaxSessions
+	}
+	return int(s.adaptiveDrainSessions.Load())
+}
+
+func (s *ExperimentalSettingsService) AdaptiveToolOutputEnabled() bool {
+	return s != nil && s.adaptiveEnabled.Load() && s.adaptiveToolEnabled.Load()
+}
+
+func (s *ExperimentalSettingsService) AdaptiveToolOutputPercent() int {
+	if s == nil {
+		return defaultAdaptiveToolOutputPercent
+	}
+	return int(s.adaptiveToolPercent.Load())
 }
 
 func (s *ExperimentalSettingsService) Set(settings ExperimentalSettings) (ExperimentalSettingsSnapshot, error) {
@@ -193,6 +253,7 @@ func (s *ExperimentalSettingsService) Set(settings ExperimentalSettings) (Experi
 	s.mu.Unlock()
 	s.weeklyOverdraftEnabled.Store(settings.WeeklyOverdraftEnabled)
 	s.adaptiveEnabled.Store(settings.AdaptiveWeeklyOverdraftEnabled)
+	s.storeTokenFirstSettings(settings)
 	return s.Snapshot(), nil
 }
 
@@ -226,5 +287,18 @@ func (s *ExperimentalSettingsService) applyConfiguredSettings(storePath string, 
 	if errSave == nil {
 		s.weeklyOverdraftEnabled.Store(settings.WeeklyOverdraftEnabled)
 		s.adaptiveEnabled.Store(settings.AdaptiveWeeklyOverdraftEnabled)
+		s.storeTokenFirstSettings(settings)
 	}
+}
+
+func (s *ExperimentalSettingsService) storeTokenFirstSettings(settings ExperimentalSettings) {
+	if s == nil {
+		return
+	}
+	settings = normalizeExperimentalSettings(settings)
+	s.adaptiveDrainEnabled.Store(settings.AdaptiveTokenDrainEnabled)
+	s.adaptiveDrainPercent.Store(int64(settings.AdaptiveTokenDrainPercent))
+	s.adaptiveDrainSessions.Store(int64(settings.AdaptiveTokenDrainMaxSessions))
+	s.adaptiveToolEnabled.Store(settings.AdaptiveToolOutputEnabled)
+	s.adaptiveToolPercent.Store(int64(settings.AdaptiveToolOutputPercent))
 }

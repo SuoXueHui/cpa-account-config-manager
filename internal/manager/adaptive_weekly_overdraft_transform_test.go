@@ -2,6 +2,7 @@ package manager
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,88 @@ func TestAdaptiveWeeklyOverdraftTransformRejectsIneligibleRequests(t *testing.T)
 				t.Fatalf("changed=%v body=%s", changed, response.Body)
 			}
 		})
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftToolOutputCanaryIsDisabledByDefault(t *testing.T) {
+	experiment := armedAdaptiveExperiment(t, "stable-auth-1", AdaptiveStrategyS1)
+	request := adaptiveTransformRequest("request-1", "stable-auth-1", `{"input":[{"type":"function_call_output","call_id":"call-1","output":"done"}]}`)
+	if response, changed := experiment.InterceptRequest(request); changed || len(response.Body) != 0 {
+		t.Fatalf("changed=%v body=%s", changed, response.Body)
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftToolOutputCanaryUsesStableAuthBucket(t *testing.T) {
+	inside := adaptiveTestAuthForCanary(t, 1, true)
+	outside := adaptiveTestAuthForCanary(t, 1, false)
+	for _, test := range []struct {
+		name    string
+		authID  string
+		changed bool
+	}{
+		{name: "inside", authID: inside, changed: true},
+		{name: "outside", authID: outside, changed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			experiment := armedAdaptiveExperiment(t, test.authID, AdaptiveStrategyS1)
+			experiment.SetToolOutputCanary(func() bool { return true }, func() int { return 1 })
+			request := adaptiveTransformRequest("request-1", test.authID, `{"input":[{"type":"function_call_output","call_id":"call-1","output":"done"}]}`)
+			response, changed := experiment.InterceptRequest(request)
+			if changed != test.changed {
+				t.Fatalf("changed=%v body=%s", changed, response.Body)
+			}
+		})
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftToolOutputCanaryAcceptsSupportedTails(t *testing.T) {
+	for _, tail := range []string{
+		`{"type":"function_call_output","call_id":"call-1","output":"done"}`,
+		`{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"done"}]}`,
+	} {
+		experiment := armedAdaptiveExperiment(t, "stable-auth-1", AdaptiveStrategyS1)
+		experiment.SetToolOutputCanary(func() bool { return true }, func() int { return 100 })
+		response, changed := experiment.InterceptRequest(adaptiveTransformRequest("request-1", "stable-auth-1", `{"input":[`+tail+`]}`))
+		if !changed {
+			t.Fatalf("tail was not transformed: %s", tail)
+		}
+		assertAdaptiveToolPairs(t, response.Body, AdaptiveStrategyS1, 1)
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftToolOutputCanaryRejectsUnsupportedTail(t *testing.T) {
+	experiment := armedAdaptiveExperiment(t, "stable-auth-1", AdaptiveStrategyS1)
+	experiment.SetToolOutputCanary(func() bool { return true }, func() int { return 100 })
+	request := adaptiveTransformRequest("request-1", "stable-auth-1", `{"input":[{"type":"reasoning","summary":[]}]}`)
+	if response, changed := experiment.InterceptRequest(request); changed || len(response.Body) != 0 {
+		t.Fatalf("changed=%v body=%s", changed, response.Body)
+	}
+}
+
+func TestAdaptiveWeeklyOverdraftTracksRequestShapeOutcomes(t *testing.T) {
+	experiment := armedAdaptiveExperiment(t, "stable-auth-1", AdaptiveStrategyS1)
+	experiment.SetToolOutputCanary(func() bool { return true }, func() int { return 100 })
+	requests := []cpaapi.RequestInterceptRequest{
+		adaptiveTransformRequest("user", "stable-auth-1", `{"input":[{"type":"message","role":"user","content":"continue"}]}`),
+		adaptiveTransformRequest("tool", "stable-auth-1", `{"input":[{"type":"function_call_output","call_id":"call-1","output":"done"}]}`),
+	}
+	for _, request := range requests {
+		if _, changed := experiment.InterceptRequest(request); !changed {
+			t.Fatalf("request %q was not transformed", request.RequestID)
+		}
+	}
+	experiment.ObserveCompletion(cpaapi.RequestCompletion{RequestID: "user", StatusCode: 200})
+	experiment.ObserveCompletion(cpaapi.RequestCompletion{RequestID: "tool", StatusCode: 429})
+
+	state, ok := experiment.stateForAuthID("stable-auth-1")
+	if !ok {
+		t.Fatal("state not found")
+	}
+	if stats := state.RequestShapeStats[AdaptiveRequestShapeUserMessage]; stats.Attempts != 1 || stats.Successes != 1 || stats.Failures != 0 {
+		t.Fatalf("user-message stats = %#v", stats)
+	}
+	if stats := state.RequestShapeStats[AdaptiveRequestShapeToolOutput]; stats.Attempts != 1 || stats.Successes != 0 || stats.Failures != 1 {
+		t.Fatalf("tool-output stats = %#v", stats)
 	}
 }
 
@@ -147,6 +230,18 @@ func adaptiveTransformRequest(requestID, authID, body string) cpaapi.RequestInte
 		RequestID: requestID, ToFormat: "codex", Body: []byte(body),
 		Metadata: map[string]any{selectedAuthMetadataKey: authID},
 	}
+}
+
+func adaptiveTestAuthForCanary(t *testing.T, percent int, selected bool) string {
+	t.Helper()
+	for index := 0; index < 10_000; index++ {
+		authID := "canary-auth-" + strconv.Itoa(index)
+		if adaptiveCanarySelected(authID, percent) == selected {
+			return authID
+		}
+	}
+	t.Fatalf("could not find auth ID with selected=%v", selected)
+	return ""
 }
 
 func assertAdaptiveToolPairs(t *testing.T, body []byte, strategy AdaptiveOverdraftStrategy, pairCount int) {

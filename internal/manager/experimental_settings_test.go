@@ -25,6 +25,63 @@ func TestExperimentalSettingsRejectMutuallyExclusiveOverdraftModes(t *testing.T)
 	}
 }
 
+func TestExperimentalSettingsTokenFirstDefaultsAndNormalization(t *testing.T) {
+	service := NewExperimentalSettingsService()
+	service.ConfigureHost(Config{DataDir: t.TempDir()}, cpaapi.SchemaVersion)
+
+	snapshot := service.Snapshot()
+	if snapshot.Settings.AdaptiveTokenDrainEnabled || snapshot.Settings.AdaptiveToolOutputEnabled {
+		t.Fatalf("token-first features must default off: %#v", snapshot.Settings)
+	}
+	if snapshot.Settings.AdaptiveTokenDrainPercent != 20 || snapshot.Settings.AdaptiveTokenDrainMaxSessions != 8 || snapshot.Settings.AdaptiveToolOutputPercent != 10 {
+		t.Fatalf("token-first defaults = %#v", snapshot.Settings)
+	}
+
+	updated, errSet := service.Set(ExperimentalSettings{
+		AdaptiveWeeklyOverdraftEnabled: true,
+		AdaptiveTokenDrainEnabled:      true,
+		AdaptiveTokenDrainPercent:      -3,
+		AdaptiveTokenDrainMaxSessions:  99,
+		AdaptiveToolOutputEnabled:      true,
+		AdaptiveToolOutputPercent:      101,
+	})
+	if errSet != nil {
+		t.Fatalf("Set() error = %v", errSet)
+	}
+	if updated.Settings.AdaptiveTokenDrainPercent != 1 || updated.Settings.AdaptiveTokenDrainMaxSessions != 64 || updated.Settings.AdaptiveToolOutputPercent != 100 {
+		t.Fatalf("normalized settings = %#v", updated.Settings)
+	}
+	if !service.AdaptiveTokenDrainEnabled() || service.AdaptiveTokenDrainPercent() != 1 || service.AdaptiveTokenDrainMaxSessions() != 64 ||
+		!service.AdaptiveToolOutputEnabled() || service.AdaptiveToolOutputPercent() != 100 {
+		t.Fatal("atomic token-first settings do not match the saved snapshot")
+	}
+}
+
+func TestExperimentalSettingsTokenFirstSettingsPersistAcrossRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	first := NewExperimentalSettingsService()
+	first.ConfigureHost(Config{DataDir: dataDir}, cpaapi.SchemaVersion)
+	_, errSet := first.Set(ExperimentalSettings{
+		AdaptiveWeeklyOverdraftEnabled: true,
+		AdaptiveTokenDrainEnabled:      true,
+		AdaptiveTokenDrainPercent:      35,
+		AdaptiveTokenDrainMaxSessions:  12,
+		AdaptiveToolOutputEnabled:      true,
+		AdaptiveToolOutputPercent:      25,
+	})
+	if errSet != nil {
+		t.Fatalf("Set() error = %v", errSet)
+	}
+
+	restarted := NewExperimentalSettingsService()
+	restarted.ConfigureHost(Config{DataDir: dataDir}, cpaapi.SchemaVersion)
+	snapshot := restarted.Snapshot().Settings
+	if !snapshot.AdaptiveTokenDrainEnabled || snapshot.AdaptiveTokenDrainPercent != 35 || snapshot.AdaptiveTokenDrainMaxSessions != 12 ||
+		!snapshot.AdaptiveToolOutputEnabled || snapshot.AdaptiveToolOutputPercent != 25 {
+		t.Fatalf("restarted settings = %#v", snapshot)
+	}
+}
+
 func TestExperimentalSettingsRejectAdaptiveModeOnLegacyHost(t *testing.T) {
 	service := NewExperimentalSettingsService()
 	service.ConfigureHost(Config{DataDir: t.TempDir()}, cpaapi.LegacySchemaVersion)

@@ -47,12 +47,23 @@ export interface AdaptiveOverdraftStrategyStats {
   attempts: number;
   successes: number;
   failures: number;
+	post_threshold_successes?: number;
+	post_threshold_tokens?: number;
+}
+
+export type AdaptiveRequestShape = "user_message" | "tool_output";
+
+export interface AdaptiveRequestShapeStats {
+	attempts: number;
+	successes: number;
+	failures: number;
 }
 
 export interface AdaptiveWeeklyOverdraftSummary {
   phase: AdaptiveOverdraftPhase;
   strategy?: AdaptiveOverdraftStrategy;
   strategy_stats?: Partial<Record<AdaptiveOverdraftStrategy, AdaptiveOverdraftStrategyStats>>;
+	request_shape_stats?: Partial<Record<AdaptiveRequestShape, AdaptiveRequestShapeStats>>;
   post_threshold_successes: number;
   post_threshold_tokens: number;
   last_success_at?: string;
@@ -1044,6 +1055,11 @@ export interface CPAServerVersionSnapshot {
 export interface ExperimentalSettings {
   weekly_overdraft_enabled: boolean;
   adaptive_weekly_overdraft_enabled?: boolean;
+	adaptive_token_drain_enabled?: boolean;
+	adaptive_token_drain_percent?: number;
+	adaptive_token_drain_max_sessions?: number;
+	adaptive_tool_output_enabled?: boolean;
+	adaptive_tool_output_percent?: number;
   agent_identity_enabled: boolean;
   auto_model_whitelist_enabled: boolean;
 }

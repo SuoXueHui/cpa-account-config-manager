@@ -330,6 +330,33 @@ func TestAdaptiveWeeklyOverdraftStateSuccessAndUsageCounters(t *testing.T) {
 	}
 }
 
+func TestAdaptiveWeeklyOverdraftAttributesPostThresholdTokensToActiveStrategy(t *testing.T) {
+	now := time.Date(2026, 7, 29, 1, 15, 0, 0, time.UTC)
+	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return true })
+	engine.now = func() time.Time { return now }
+	engine.ObserveAccounts([]Account{adaptiveTestAccount("account-1", "stable-auth-1", 100, now)})
+	engine.mu.Lock()
+	record := engine.records[adaptiveAuthFingerprint("stable-auth-1")]
+	record.Phase = AdaptivePhaseActiveS2
+	record.Strategy = AdaptiveStrategyS2
+	engine.records[record.Fingerprint] = record
+	engine.mu.Unlock()
+
+	engine.ObserveUsage(cpaapi.UsageRecord{
+		Provider: "codex", AuthID: "stable-auth-1", AuthIndex: "account-1", RequestedAt: now,
+		Detail: cpaapi.UsageDetail{TotalTokens: 1234},
+	})
+
+	state, ok := engine.stateForAuthID("stable-auth-1")
+	if !ok {
+		t.Fatal("state not found")
+	}
+	stats := state.StrategyStats[AdaptiveStrategyS2]
+	if stats.PostThresholdSuccesses != 1 || stats.PostThresholdTokens != 1234 {
+		t.Fatalf("strategy stats = %#v", stats)
+	}
+}
+
 func TestAdaptiveWeeklyOverdraftTracksInjectedStrategyOutcome(t *testing.T) {
 	now := time.Date(2026, 7, 29, 1, 30, 0, 0, time.UTC)
 	engine := NewAdaptiveWeeklyOverdraftExperiment(func() bool { return true })

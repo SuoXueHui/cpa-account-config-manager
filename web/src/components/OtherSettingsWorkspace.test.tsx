@@ -177,8 +177,18 @@ describe("OtherSettingsWorkspace", () => {
     await waitFor(() => expect(requests.some(({ url, init }) => url.endsWith("/experiments") && init.method === "PUT")).toBe(true));
     const configRequest = requests.find(({ url, init }) => url.endsWith("/config") && init.method === "PATCH");
     const saveRequest = requests.find(({ url, init }) => url.endsWith("/experiments") && init.method === "PUT");
-    expect(JSON.parse(String(configRequest?.init.body))).toEqual({ experimental_settings: { weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true } });
-    expect(JSON.parse(String(saveRequest?.init.body))).toEqual({ weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true });
+		expect(JSON.parse(String(configRequest?.init.body))).toEqual({ experimental_settings: {
+			weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false,
+			adaptive_token_drain_enabled: false, adaptive_token_drain_percent: 20, adaptive_token_drain_max_sessions: 8,
+			adaptive_tool_output_enabled: false, adaptive_tool_output_percent: 10,
+			agent_identity_enabled: true, auto_model_whitelist_enabled: true,
+		} });
+		expect(JSON.parse(String(saveRequest?.init.body))).toEqual({
+			weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false,
+			adaptive_token_drain_enabled: false, adaptive_token_drain_percent: 20, adaptive_token_drain_max_sessions: 8,
+			adaptive_tool_output_enabled: false, adaptive_tool_output_percent: 10,
+			agent_identity_enabled: true, auto_model_whitelist_enabled: true,
+		});
     expect(onExperimentalSettingsChange).toHaveBeenLastCalledWith({ weekly_overdraft_enabled: true, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: true, auto_model_whitelist_enabled: true });
     expect(onNotice).toHaveBeenCalledWith("实验性设置已保存");
   });
@@ -216,10 +226,124 @@ describe("OtherSettingsWorkspace", () => {
     expect(saved[0]).toEqual({
       weekly_overdraft_enabled: false,
       adaptive_weekly_overdraft_enabled: true,
+			adaptive_token_drain_enabled: false,
+			adaptive_token_drain_percent: 20,
+			adaptive_token_drain_max_sessions: 8,
+			adaptive_tool_output_enabled: false,
+			adaptive_tool_output_percent: 10,
       agent_identity_enabled: false,
       auto_model_whitelist_enabled: true,
     });
   });
+
+  it("loads, edits, and saves token-first adaptive controls", async () => {
+		const user = userEvent.setup();
+		const saved: ExperimentalSettings[] = [];
+		vi.spyOn(api, "getEffectiveUpdateStatus").mockResolvedValue({
+			policy: { check_enabled: false, check_interval_hours: 24, auto_update: false },
+			current_version: "0.3.1322", update_available: false, checking: false, pending: false,
+		});
+		vi.spyOn(api, "getCPAServerVersionStatus").mockResolvedValue({ update_available: false, checked_at: "2026-08-10T00:00:00Z" });
+		vi.spyOn(api, "getExperimentalSettings").mockResolvedValue({
+			settings: {
+				weekly_overdraft_enabled: false, adaptive_weekly_overdraft_enabled: true,
+				adaptive_token_drain_enabled: false, adaptive_token_drain_percent: 20, adaptive_token_drain_max_sessions: 8,
+				adaptive_tool_output_enabled: false, adaptive_tool_output_percent: 10,
+				agent_identity_enabled: false, auto_model_whitelist_enabled: true,
+			},
+			adaptive_weekly_overdraft_available: true,
+		});
+		vi.spyOn(api, "saveExperimentalSettings").mockImplementation(async (settings) => {
+			saved.push(settings);
+			return { settings, adaptive_weekly_overdraft_available: true };
+		});
+
+		render(<OtherSettingsWorkspace onAPIError={() => undefined} onNotice={() => undefined} />);
+		const workspace = await screen.findByRole("region", { name: "其他配置" });
+		await user.click(within(workspace).getByRole("tab", { name: "实验性功能" }));
+		const panel = within(workspace).getByRole("tabpanel", { name: "实验性功能" });
+		const drain = within(panel).getByRole("checkbox", { name: "99% 后会话集中调度" });
+		const toolOutput = within(panel).getByRole("checkbox", { name: "工具输出尾部兼容" });
+		expect(drain).toBeEnabled();
+		expect(toolOutput).toBeEnabled();
+		await user.click(drain);
+		await user.click(toolOutput);
+		await user.clear(within(panel).getByRole("spinbutton", { name: "调度灰度比例" }));
+		await user.type(within(panel).getByRole("spinbutton", { name: "调度灰度比例" }), "35");
+		await user.clear(within(panel).getByRole("spinbutton", { name: "每凭证最大会话数" }));
+		await user.type(within(panel).getByRole("spinbutton", { name: "每凭证最大会话数" }), "12");
+		await user.clear(within(panel).getByRole("spinbutton", { name: "工具输出灰度比例" }));
+		await user.type(within(panel).getByRole("spinbutton", { name: "工具输出灰度比例" }), "25");
+		await user.click(within(panel).getByRole("button", { name: "保存设置" }));
+
+		await waitFor(() => expect(saved).toHaveLength(1));
+		expect(saved[0]).toEqual({
+			weekly_overdraft_enabled: false, adaptive_weekly_overdraft_enabled: true,
+			adaptive_token_drain_enabled: true, adaptive_token_drain_percent: 35, adaptive_token_drain_max_sessions: 12,
+			adaptive_tool_output_enabled: true, adaptive_tool_output_percent: 25,
+			agent_identity_enabled: false, auto_model_whitelist_enabled: true,
+		});
+	});
+
+	it("disables token-first controls until adaptive mode is enabled", async () => {
+		const user = userEvent.setup();
+		vi.spyOn(api, "getEffectiveUpdateStatus").mockResolvedValue({
+			policy: { check_enabled: false, check_interval_hours: 24, auto_update: false },
+			current_version: "0.3.1322", update_available: false, checking: false, pending: false,
+		});
+		vi.spyOn(api, "getCPAServerVersionStatus").mockResolvedValue({ update_available: false, checked_at: "2026-08-10T00:00:00Z" });
+		vi.spyOn(api, "getExperimentalSettings").mockResolvedValue({
+			settings: { weekly_overdraft_enabled: false, adaptive_weekly_overdraft_enabled: false, agent_identity_enabled: false, auto_model_whitelist_enabled: true },
+			adaptive_weekly_overdraft_available: true,
+		});
+
+		render(<OtherSettingsWorkspace onAPIError={() => undefined} onNotice={() => undefined} />);
+		const workspace = await screen.findByRole("region", { name: "其他配置" });
+		await user.click(within(workspace).getByRole("tab", { name: "实验性功能" }));
+		const panel = within(workspace).getByRole("tabpanel", { name: "实验性功能" });
+		expect(within(panel).getByRole("checkbox", { name: "99% 后会话集中调度" })).toBeDisabled();
+		expect(within(panel).getByRole("checkbox", { name: "工具输出尾部兼容" })).toBeDisabled();
+		expect(within(panel).getByRole("spinbutton", { name: "调度灰度比例" })).toBeDisabled();
+	});
+
+	it("uses safe defaults when token-first number inputs are left blank", async () => {
+		const user = userEvent.setup();
+		const saved: ExperimentalSettings[] = [];
+		vi.spyOn(api, "getEffectiveUpdateStatus").mockResolvedValue({
+			policy: { check_enabled: false, check_interval_hours: 24, auto_update: false },
+			current_version: "0.3.1322", update_available: false, checking: false, pending: false,
+		});
+		vi.spyOn(api, "getCPAServerVersionStatus").mockResolvedValue({ update_available: false, checked_at: "2026-08-10T00:00:00Z" });
+		vi.spyOn(api, "getExperimentalSettings").mockResolvedValue({
+			settings: {
+				weekly_overdraft_enabled: false, adaptive_weekly_overdraft_enabled: true,
+				adaptive_token_drain_enabled: true, adaptive_token_drain_percent: 35, adaptive_token_drain_max_sessions: 12,
+				adaptive_tool_output_enabled: true, adaptive_tool_output_percent: 25,
+				agent_identity_enabled: false, auto_model_whitelist_enabled: true,
+			},
+			adaptive_weekly_overdraft_available: true,
+		});
+		vi.spyOn(api, "saveExperimentalSettings").mockImplementation(async (settings) => {
+			saved.push(settings);
+			return { settings, adaptive_weekly_overdraft_available: true };
+		});
+
+		render(<OtherSettingsWorkspace onAPIError={() => undefined} onNotice={() => undefined} />);
+		const workspace = await screen.findByRole("region", { name: "其他配置" });
+		await user.click(within(workspace).getByRole("tab", { name: "实验性功能" }));
+		const panel = within(workspace).getByRole("tabpanel", { name: "实验性功能" });
+		await user.clear(within(panel).getByRole("spinbutton", { name: "调度灰度比例" }));
+		await user.clear(within(panel).getByRole("spinbutton", { name: "每凭证最大会话数" }));
+		await user.clear(within(panel).getByRole("spinbutton", { name: "工具输出灰度比例" }));
+		await user.click(within(panel).getByRole("button", { name: "保存设置" }));
+
+		await waitFor(() => expect(saved).toHaveLength(1));
+		expect(saved[0]).toMatchObject({
+			adaptive_token_drain_percent: 20,
+			adaptive_token_drain_max_sessions: 8,
+			adaptive_tool_output_percent: 10,
+		});
+	});
 
   it("disables adaptive weekly overdraft on lifecycle schema v1", async () => {
     const user = userEvent.setup();

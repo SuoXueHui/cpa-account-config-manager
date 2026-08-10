@@ -190,6 +190,12 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		}
 		pluginApp.HandleRequestComplete(completion)
 		return okEnvelope(struct{}{})
+	case cpaapi.MethodSchedulerPick:
+		var schedulerRequest cpaapi.SchedulerPickRequest
+		if errUnmarshal := json.Unmarshal(request, &schedulerRequest); errUnmarshal != nil {
+			return nil, fmt.Errorf("decode scheduler pick input: %w", errUnmarshal)
+		}
+		return okEnvelope(pluginApp.HandleSchedulerPick(schedulerRequest))
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}

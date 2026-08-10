@@ -62,6 +62,11 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
   const [confirmAutoUpdate, setConfirmAutoUpdate] = useState(false);
   const [weeklyOverdraftEnabled, setWeeklyOverdraftEnabled] = useState(false);
   const [adaptiveWeeklyOverdraftEnabled, setAdaptiveWeeklyOverdraftEnabled] = useState(false);
+	const [adaptiveTokenDrainEnabled, setAdaptiveTokenDrainEnabled] = useState(false);
+	const [adaptiveTokenDrainPercent, setAdaptiveTokenDrainPercent] = useState("20");
+	const [adaptiveTokenDrainMaxSessions, setAdaptiveTokenDrainMaxSessions] = useState("8");
+	const [adaptiveToolOutputEnabled, setAdaptiveToolOutputEnabled] = useState(false);
+	const [adaptiveToolOutputPercent, setAdaptiveToolOutputPercent] = useState("10");
   const [agentIdentityEnabled, setAgentIdentityEnabled] = useState(false);
   const [error, setError] = useState("");
   const handleError = useCallback((caught: unknown) => {
@@ -119,6 +124,11 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
     if (!experiments?.settings) return;
     setWeeklyOverdraftEnabled(experiments.settings.weekly_overdraft_enabled === true);
     setAdaptiveWeeklyOverdraftEnabled(experiments.settings.adaptive_weekly_overdraft_enabled === true);
+		setAdaptiveTokenDrainEnabled(experiments.settings.adaptive_token_drain_enabled === true);
+		setAdaptiveTokenDrainPercent(String(experiments.settings.adaptive_token_drain_percent ?? 20));
+		setAdaptiveTokenDrainMaxSessions(String(experiments.settings.adaptive_token_drain_max_sessions ?? 8));
+		setAdaptiveToolOutputEnabled(experiments.settings.adaptive_tool_output_enabled === true);
+		setAdaptiveToolOutputPercent(String(experiments.settings.adaptive_tool_output_percent ?? 10));
     setAgentIdentityEnabled(experiments.settings.agent_identity_enabled === true);
   }, [experiments]);
 
@@ -205,6 +215,11 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
       const next = await api.saveExperimentalSettings({
         weekly_overdraft_enabled: weeklyOverdraftEnabled,
         adaptive_weekly_overdraft_enabled: adaptiveWeeklyOverdraftEnabled,
+				adaptive_token_drain_enabled: adaptiveTokenDrainEnabled,
+				adaptive_token_drain_percent: boundedInteger(adaptiveTokenDrainPercent, 20, 1, 100),
+				adaptive_token_drain_max_sessions: boundedInteger(adaptiveTokenDrainMaxSessions, 8, 1, 64),
+				adaptive_tool_output_enabled: adaptiveToolOutputEnabled,
+				adaptive_tool_output_percent: boundedInteger(adaptiveToolOutputPercent, 10, 1, 100),
         agent_identity_enabled: agentIdentityEnabled,
         auto_model_whitelist_enabled: true,
       });
@@ -219,6 +234,7 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
   };
 
   const pluginBusy = checkingPlugin || Boolean(updates?.checking || updates?.pending);
+	const adaptiveTokenControlsDisabled = loading || savingExperiment || !experiments || !adaptiveWeeklyOverdraftEnabled;
   const updateFontSize = (next: FontSizePreset) => {
     setFontSize(next);
     writeFontSize(next);
@@ -393,6 +409,27 @@ export function OtherSettingsWorkspace({ onAPIError, onNotice, forceLoading = fa
               <div><strong>{tx("ui.automation_behavior")}</strong><span>{tx("ui.adaptive_weekly_overdraft_automation_behavior")}</span></div>
               <div><strong>{tx("ui.availability_notice")}</strong><span>{tx("ui.adaptive_weekly_overdraft_availability_notice")}</span></div>
             </div>
+						<div className="experimental-subfeatures" aria-label={tx("ui.adaptive_token_first_controls")}>
+							<div className="experimental-subfeature">
+								<div className="experimental-subfeature-heading">
+									<div><strong>{tx("ui.adaptive_token_drain")}</strong><span>{tx("ui.adaptive_token_drain_description")}</span></div>
+									<label className="switch-control"><input type="checkbox" checked={adaptiveTokenDrainEnabled} disabled={adaptiveTokenControlsDisabled} onChange={(event) => setAdaptiveTokenDrainEnabled(event.target.checked)} aria-label={tx("ui.adaptive_token_drain")} /><b>{tx(adaptiveTokenDrainEnabled ? "ui.on_2" : "ui.off_2")}</b></label>
+								</div>
+								<div className="experimental-subfeature-controls">
+									<label><span>{tx("ui.adaptive_token_drain_percent")}</span><span className="number-suffix"><input type="number" min="1" max="100" step="1" value={adaptiveTokenDrainPercent} disabled={adaptiveTokenControlsDisabled || !adaptiveTokenDrainEnabled} onChange={(event) => setAdaptiveTokenDrainPercent(event.target.value)} aria-label={tx("ui.adaptive_token_drain_percent")} /><b>{tx("ui.percent")}</b></span></label>
+									<label><span>{tx("ui.adaptive_token_drain_max_sessions")}</span><span className="number-suffix"><input type="number" min="1" max="64" step="1" value={adaptiveTokenDrainMaxSessions} disabled={adaptiveTokenControlsDisabled || !adaptiveTokenDrainEnabled} onChange={(event) => setAdaptiveTokenDrainMaxSessions(event.target.value)} aria-label={tx("ui.adaptive_token_drain_max_sessions")} /><b>{tx("ui.sessions")}</b></span></label>
+								</div>
+							</div>
+							<div className="experimental-subfeature">
+								<div className="experimental-subfeature-heading">
+									<div><strong>{tx("ui.adaptive_tool_output")}</strong><span>{tx("ui.adaptive_tool_output_description")}</span></div>
+									<label className="switch-control"><input type="checkbox" checked={adaptiveToolOutputEnabled} disabled={adaptiveTokenControlsDisabled} onChange={(event) => setAdaptiveToolOutputEnabled(event.target.checked)} aria-label={tx("ui.adaptive_tool_output")} /><b>{tx(adaptiveToolOutputEnabled ? "ui.on_2" : "ui.off_2")}</b></label>
+								</div>
+								<div className="experimental-subfeature-controls experimental-subfeature-controls-single">
+									<label><span>{tx("ui.adaptive_tool_output_percent")}</span><span className="number-suffix"><input type="number" min="1" max="100" step="1" value={adaptiveToolOutputPercent} disabled={adaptiveTokenControlsDisabled || !adaptiveToolOutputEnabled} onChange={(event) => setAdaptiveToolOutputPercent(event.target.value)} aria-label={tx("ui.adaptive_tool_output_percent")} /><b>{tx("ui.percent")}</b></span></label>
+								</div>
+							</div>
+						</div>
             {experiments?.adaptive_weekly_overdraft_unavailable_reason === "host_schema_v2_required" ? (
               <div className="experimental-storage-error" role="note"><AlertTriangle size={16} /><span>{tx("ui.adaptive_weekly_overdraft_host_schema_required")}</span></div>
             ) : null}
@@ -449,4 +486,11 @@ function pluginStatusLabel(snapshot: UpdateSnapshot | null, locale: Parameters<t
   if (!snapshot) return tx("ui.checking");
   if (snapshot.error) return operatorMessage(snapshot.error, locale);
   return tx(snapshot.checking || snapshot.pending ? "ui.checking" : snapshot.update_available ? "ui.update_available" : "ui.up_to_date");
+}
+
+function boundedInteger(value: string, fallback: number, minimum: number, maximum: number): number {
+	if (value.trim() === "") return fallback;
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed)) return fallback;
+	return Math.min(Math.max(parsed, minimum), maximum);
 }
