@@ -727,7 +727,7 @@ describe("management API client", () => {
 			if (url.endsWith("/inspection")) return jsonResponse({ policy: inspectionPolicy });
 			if (url.endsWith("/updates")) return jsonResponse({ policy: updatePolicy });
 			if (url.endsWith("/operations/settings")) return jsonResponse({ extended_history: true, page_size: 500, retained: 500, archived_segments: 0 });
-			if (url.endsWith("/experiments")) return jsonResponse({ settings: { weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true } });
+			if (url.endsWith("/experiments")) return jsonResponse({ settings: { weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true, sub2api_credit_usage_enabled: true } });
 			if (url.endsWith("/config")) return jsonResponse({ status: "ok" });
 			return jsonResponse({}, 404);
 		});
@@ -744,7 +744,7 @@ describe("management API client", () => {
 			inspection_policy: inspectionPolicy,
 			update_policy: updatePolicy,
 			operation_settings: { extended_history: true },
-			experimental_settings: { weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true },
+			experimental_settings: { weekly_overdraft_enabled: true, agent_identity_enabled: true, auto_model_whitelist_enabled: true, sub2api_credit_usage_enabled: true },
 		});
 		expect(String(configInit.body)).not.toContain("management-secret");
 	});

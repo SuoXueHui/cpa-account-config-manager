@@ -67,6 +67,7 @@ type App struct {
 	force             *ForceSyncEngine
 	imports           *ImportService
 	usage             *UsageTracker
+	creditUsage       *Sub2APICreditUsage
 	operations        *OperationJournal
 	modelTests        *ModelTestService
 	newAccountProbe   *newAccountModelProbeEngine
@@ -86,6 +87,8 @@ type App struct {
 
 func NewApp(host AuthHost, indexHTML []byte) *App {
 	usage := NewUsageTracker()
+	creditUsage := NewSub2APICreditUsage()
+	usage.SetCreditCalculator(creditUsage)
 	accounts := NewAccountService(host, usage)
 	concurrency := NewAccountConcurrencyService()
 	accounts.SetAccountConcurrency(concurrency)
@@ -145,6 +148,7 @@ func NewApp(host AuthHost, indexHTML []byte) *App {
 		force:             force,
 		imports:           imports,
 		usage:             usage,
+		creditUsage:       creditUsage,
 		operations:        operations,
 		modelTests:        modelTests,
 		newAccountProbe:   newAccountProbe,
@@ -203,6 +207,7 @@ func (a *App) ConfigureHost(raw []byte, hostSchema uint32) {
 	a.operations.Configure(config)
 	a.experiments.ConfigureHost(config, hostSchema)
 	a.adaptiveOverdraft.Configure(config, hostSchema)
+	a.creditUsage.Configure(config, a.experiments.Sub2APICreditUsageEnabled())
 	a.newAccountProbe.Configure(config)
 	a.quotaBootstrap.Start()
 	a.jobs.Configure(config)
@@ -260,6 +265,7 @@ func (a *App) quiesceRetiredInstance() {
 		a.agentIdentity.Clear()
 		a.concurrency.Shutdown()
 		a.adaptiveOverdraft.Close()
+		a.creditUsage.Close()
 		a.usage.Close()
 		if superseded {
 			debug.FreeOSMemory()
@@ -1560,6 +1566,7 @@ func (a *App) handlePutExperimentalSettings(req cpaapi.ManagementRequest) cpaapi
 		}
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "experimental settings could not be persisted"})
 	}
+	a.creditUsage.SetEnabled(snapshot.Settings.Sub2APICreditUsageEnabled)
 	if a.policies.Snapshot().Policy.NewAccountModelProbeEnabled {
 		managementKey := resolveManagementKey(req.Headers)
 		a.newAccountProbe.Arm(managementKey, req.HostCallbackID)

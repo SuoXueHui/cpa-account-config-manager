@@ -21,6 +21,7 @@ type ExperimentalSettings struct {
 	AdaptiveToolOutputPercent      int  `json:"adaptive_tool_output_percent" yaml:"adaptive_tool_output_percent"`
 	AgentIdentityEnabled           bool `json:"agent_identity_enabled" yaml:"agent_identity_enabled"`
 	AutoModelWhitelistEnabled      bool `json:"auto_model_whitelist_enabled" yaml:"auto_model_whitelist_enabled"`
+	Sub2APICreditUsageEnabled      bool `json:"sub2api_credit_usage_enabled" yaml:"sub2api_credit_usage_enabled"`
 }
 
 const (
@@ -76,21 +77,22 @@ type ExperimentalSettingsSnapshot struct {
 }
 
 type ExperimentalSettingsService struct {
-	mu                     sync.RWMutex
-	storeMu                sync.Mutex
-	store                  string
-	settings               ExperimentalSettings
-	storageErr             string
-	configurationWarning   string
-	configured             bool
-	hostSchema             uint32
-	weeklyOverdraftEnabled atomic.Bool
-	adaptiveEnabled        atomic.Bool
-	adaptiveDrainEnabled   atomic.Bool
-	adaptiveDrainPercent   atomic.Int64
-	adaptiveDrainSessions  atomic.Int64
-	adaptiveToolEnabled    atomic.Bool
-	adaptiveToolPercent    atomic.Int64
+	mu                        sync.RWMutex
+	storeMu                   sync.Mutex
+	store                     string
+	settings                  ExperimentalSettings
+	storageErr                string
+	configurationWarning      string
+	configured                bool
+	hostSchema                uint32
+	weeklyOverdraftEnabled    atomic.Bool
+	adaptiveEnabled           atomic.Bool
+	adaptiveDrainEnabled      atomic.Bool
+	adaptiveDrainPercent      atomic.Int64
+	adaptiveDrainSessions     atomic.Int64
+	adaptiveToolEnabled       atomic.Bool
+	adaptiveToolPercent       atomic.Int64
+	sub2APICreditUsageEnabled atomic.Bool
 }
 
 func NewExperimentalSettingsService() *ExperimentalSettingsService {
@@ -156,6 +158,7 @@ func (s *ExperimentalSettingsService) ConfigureHost(config Config, hostSchema ui
 	s.weeklyOverdraftEnabled.Store(settings.WeeklyOverdraftEnabled)
 	s.adaptiveEnabled.Store(settings.AdaptiveWeeklyOverdraftEnabled)
 	s.storeTokenFirstSettings(settings)
+	s.sub2APICreditUsageEnabled.Store(settings.Sub2APICreditUsageEnabled)
 }
 
 func (s *ExperimentalSettingsService) Snapshot() ExperimentalSettingsSnapshot {
@@ -219,6 +222,13 @@ func (s *ExperimentalSettingsService) AdaptiveToolOutputPercent() int {
 	return int(s.adaptiveToolPercent.Load())
 }
 
+func (s *ExperimentalSettingsService) Sub2APICreditUsageEnabled() bool {
+	if s == nil {
+		return false
+	}
+	return s.sub2APICreditUsageEnabled.Load()
+}
+
 func (s *ExperimentalSettingsService) Set(settings ExperimentalSettings) (ExperimentalSettingsSnapshot, error) {
 	if s == nil {
 		return ExperimentalSettingsSnapshot{}, fmt.Errorf("experimental settings are unavailable")
@@ -254,6 +264,7 @@ func (s *ExperimentalSettingsService) Set(settings ExperimentalSettings) (Experi
 	s.weeklyOverdraftEnabled.Store(settings.WeeklyOverdraftEnabled)
 	s.adaptiveEnabled.Store(settings.AdaptiveWeeklyOverdraftEnabled)
 	s.storeTokenFirstSettings(settings)
+	s.sub2APICreditUsageEnabled.Store(settings.Sub2APICreditUsageEnabled)
 	return s.Snapshot(), nil
 }
 
